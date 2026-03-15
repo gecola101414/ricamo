@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Eraser, Trash2, Download, Plus, Minus, X, SquareDashed, Copy, ClipboardPaste, FlipHorizontal, FlipVertical, Ruler, Move, Upload } from 'lucide-react';
+import { Eraser, Trash2, Download, Plus, Minus, X, SquareDashed, Copy, ClipboardPaste, FlipHorizontal, FlipVertical, Ruler, Move, Upload, Hand } from 'lucide-react';
 import { TEMPLATES } from './templates';
 import * as pdfjsLib from 'pdfjs-dist';
 
@@ -14,7 +14,7 @@ const DEFAULT_COLORS = [
   '#A0522D', '#8B4513', '#2F4F4F', '#708090', '#778899'
 ];
 
-type Tool = 'line' | 'eraser' | 'select' | 'symmetry' | 'move' | 'duplicate';
+type Tool = 'line' | 'eraser' | 'select' | 'symmetry' | 'move' | 'duplicate' | 'pan';
 
 type LineSegment = {
   r1: number;
@@ -40,6 +40,7 @@ export default function App() {
   const [isDrawing, setIsDrawing] = useState(false);
   const [dragStart, setDragStart] = useState<{r: number, c: number} | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{r: number, c: number} | null>(null);
+  const [pointerCoords, setPointerCoords] = useState<{x: number, y: number} | null>(null);
   const [selectionStart, setSelectionStart] = useState<{r: number, c: number} | null>(null);
   const [selectionEnd, setSelectionEnd] = useState<{r: number, c: number} | null>(null);
   const [clipboard, setClipboard] = useState<ClipboardData | null>(null);
@@ -130,6 +131,8 @@ export default function App() {
   };
 
   const handleCellDown = (row: number, col: number) => {
+    if (currentTool === 'pan') return;
+    
     if (currentTool !== 'select' && currentTool !== 'symmetry' && currentTool !== 'move' && currentTool !== 'duplicate') {
       setSelectionStart(null);
       setSelectionEnd(null);
@@ -186,6 +189,47 @@ export default function App() {
     }
   };
 
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isDrawing) return;
+    const touch = e.touches[0];
+    
+    // Calculate exact coordinates relative to the grid
+    const container = document.getElementById('canvas-container');
+    if (container) {
+      const rect = container.getBoundingClientRect();
+      const gridElement = container.querySelector('div > div'); // The actual grid div
+      if (gridElement) {
+        const gridRect = gridElement.getBoundingClientRect();
+        const x = (touch.clientX - gridRect.left) / (gridRect.width / gridSize.width);
+        const y = (touch.clientY - gridRect.top) / (gridRect.height / gridSize.height);
+        setPointerCoords({ x, y });
+      }
+    }
+
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    if (element) {
+      const r = element.getAttribute('data-row');
+      const c = element.getAttribute('data-col');
+      if (r !== null && c !== null) {
+        handleCellEnter(parseInt(r), parseInt(c));
+      }
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDrawing) return;
+    const container = document.getElementById('canvas-container');
+    if (container) {
+      const gridElement = container.querySelector('div > div');
+      if (gridElement) {
+        const gridRect = gridElement.getBoundingClientRect();
+        const x = (e.clientX - gridRect.left) / (gridRect.width / gridSize.width);
+        const y = (e.clientY - gridRect.top) / (gridRect.height / gridSize.height);
+        setPointerCoords({ x, y });
+      }
+    }
+  };
+
   const reflectPoint = (r: number, c: number, axisR1: number, axisC1: number, axisR2: number, axisC2: number) => {
     const dx = axisC2 - axisC1;
     const dy = axisR2 - axisR1;
@@ -206,12 +250,26 @@ export default function App() {
 
   const handleCellUp = () => {
     if (currentTool === 'line' && isDrawing && dragStart && dragCurrent) {
-      if (dragStart.r !== dragCurrent.r || dragStart.c !== dragCurrent.c) {
+      const startX = Math.round(dragStart.c + 0.5);
+      const startY = Math.round(dragStart.r + 0.5);
+      
+      let endX = dragCurrent.c + 0.5;
+      let endY = dragCurrent.r + 0.5;
+      
+      if (pointerCoords) {
+        endX = Math.round(pointerCoords.x);
+        endY = Math.round(pointerCoords.y);
+      } else {
+        endX = Math.round(dragCurrent.c + 0.5);
+        endY = Math.round(dragCurrent.r + 0.5);
+      }
+
+      if (startX !== endX || startY !== endY) {
         setLines(prev => [...prev, {
-          r1: dragStart.r,
-          c1: dragStart.c,
-          r2: dragCurrent.r,
-          c2: dragCurrent.c,
+          r1: startY,
+          c1: startX,
+          r2: endY,
+          c2: endX,
           color: currentColor
         }]);
       }
@@ -633,30 +691,30 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-stone-100 text-stone-900 flex flex-col font-sans" onMouseUp={handleCellUp} onMouseLeave={handleCellUp}>
+    <div className="h-screen w-screen overflow-hidden bg-stone-100 text-stone-900 flex flex-col font-sans" onMouseUp={handleCellUp} onMouseLeave={handleCellUp} onTouchEnd={handleCellUp}>
       {/* Header */}
-      <header className="bg-white border-b border-stone-200 px-6 py-4 flex items-center justify-between shadow-sm z-10 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-indigo-600 rounded-md flex items-center justify-center text-white font-bold">
+      <header className="bg-white border-b border-stone-200 px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-center justify-between shadow-sm z-10 shrink-0 gap-3">
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="w-6 h-6 md:w-8 md:h-8 bg-indigo-600 rounded-md flex items-center justify-center text-white font-bold text-xs md:text-base">
             CS
           </div>
-          <h1 className="text-xl font-semibold tracking-tight">Cross Stitch Designer</h1>
+          <h1 className="text-lg md:text-xl font-semibold tracking-tight">Cross Stitch Designer</h1>
         </div>
-        <div className="flex items-center gap-4">
-          <button onClick={() => setShowClearModal(true)} className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 rounded-md transition-colors">
-            <Trash2 size={16} /> Clear
+        <div className="flex items-center gap-2 md:gap-4">
+          <button onClick={() => setShowClearModal(true)} className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 text-xs md:text-sm font-medium text-red-600 hover:bg-red-50 rounded-md transition-colors">
+            <Trash2 size={16} /> <span className="hidden sm:inline">Clear</span>
           </button>
-          <button onClick={exportImage} className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors">
-            <Download size={16} /> Export
+          <button onClick={exportImage} className="flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 text-xs md:text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors">
+            <Download size={16} /> <span className="hidden sm:inline">Export</span>
           </button>
         </div>
       </header>
 
       {/* Main Content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-64 bg-white border-r border-stone-200 flex flex-col overflow-y-auto z-10 shadow-sm shrink-0">
-          <div className="p-5 border-b border-stone-100">
+        <aside className="w-full md:w-64 h-[45%] md:h-auto bg-white border-t md:border-t-0 md:border-r border-stone-200 flex flex-col overflow-y-auto z-10 shadow-sm shrink-0 order-2 md:order-1">
+          <div className="p-4 md:p-5 border-b border-stone-100">
             <h2 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-3">Background / Watermark</h2>
             <div className="space-y-3">
               <label className="flex items-center justify-center gap-2 w-full py-2 px-3 border border-stone-200 rounded-md text-sm text-stone-600 hover:bg-stone-50 cursor-pointer transition-colors">
@@ -716,6 +774,13 @@ export default function App() {
           <div className="p-5 border-b border-stone-100">
             <h2 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-3">Tools</h2>
             <div className="grid grid-cols-4 gap-2">
+              <button
+                onClick={() => setCurrentTool('pan')}
+                className={`flex flex-col items-center justify-center gap-1 py-3 rounded-lg border transition-all ${currentTool === 'pan' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-stone-200 text-stone-600 hover:bg-stone-50'}`}
+              >
+                <Hand size={18} />
+                <span className="text-[10px] font-medium">Pan</span>
+              </button>
               <button
                 onClick={() => setCurrentTool('line')}
                 className={`flex flex-col items-center justify-center gap-1 py-3 rounded-lg border transition-all ${currentTool === 'line' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-stone-200 text-stone-600 hover:bg-stone-50'}`}
@@ -890,18 +955,21 @@ export default function App() {
         </aside>
 
         {/* Canvas Area */}
-        <main className="flex-1 overflow-auto bg-stone-200/50 p-8 flex items-center justify-center relative" id="canvas-container">
+        <main className="flex-1 overflow-auto bg-stone-200/50 p-4 md:p-8 flex items-center justify-center relative order-1 md:order-2" id="canvas-container">
           <div className="relative" style={{ width: 'fit-content' }}>
             <div 
               className="bg-white shadow-xl transition-all duration-200 ease-in-out relative z-10"
+              onTouchMove={handleTouchMove}
+              onMouseMove={handleMouseMove}
               style={{
+                touchAction: currentTool === 'pan' ? 'auto' : 'none',
                 display: 'grid',
                 gridTemplateColumns: `repeat(${gridSize.width}, 1fr)`,
                 gridTemplateRows: `repeat(${gridSize.height}, 1fr)`,
                 width: 'fit-content',
                 borderTop: (showGridLines && !showRealistic) ? '1px solid #e5e7eb' : 'none',
                 borderLeft: (showGridLines && !showRealistic) ? '1px solid #e5e7eb' : 'none',
-                backgroundImage: showRealistic ? 'url("data:image/svg+xml,%3Csvg width=\'20\' height=\'20\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cpath d=\'M 20 0 L 0 20 M 0 0 L 20 20\' fill=\'none\' stroke=\'%23e7e5e4\' stroke-width=\'1\'/%3E%3Ccircle cx=\'10\' cy=\'10\' r=\'1.5\' fill=\'%23d6d3d1\'/%3E%3C/svg%3E")' : 'none',
+                backgroundImage: showRealistic ? 'url("data:image/svg+xml,%3Csvg width=\'20\' height=\'20\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cpath d=\'M 10 0 L 10 20 M 0 10 L 20 10\' fill=\'none\' stroke=\'%23e7e5e4\' stroke-width=\'2\'/%3E%3Ccircle cx=\'0\' cy=\'0\' r=\'1.5\' fill=\'%23a8a29e\'/%3E%3C/svg%3E")' : 'none',
                 backgroundColor: showRealistic ? '#f5f5f4' : 'white',
               }}
               onMouseLeave={handleCellUp}
@@ -914,8 +982,13 @@ export default function App() {
                   return (
                     <div
                       key={`${rIndex}-${cIndex}`}
+                      data-row={rIndex}
+                      data-col={cIndex}
                       onMouseDown={() => handleCellDown(rIndex, cIndex)}
                       onMouseEnter={() => handleCellEnter(rIndex, cIndex)}
+                      onTouchStart={(e) => {
+                        handleCellDown(rIndex, cIndex);
+                      }}
                       className="w-5 h-5 sm:w-6 sm:h-6 cursor-crosshair select-none relative group"
                       style={{
                         backgroundColor: (!showRealistic && cellColor) ? cellColor : 'transparent',
@@ -961,13 +1034,13 @@ export default function App() {
 
               {lines.map((line, i) => (
                 <React.Fragment key={i}>
-                  {!showRealistic && <circle cx={line.c1 + 0.5} cy={line.r1 + 0.5} r="0.12" fill="#292524" opacity="0.4" />}
-                  {!showRealistic && <circle cx={line.c2 + 0.5} cy={line.r2 + 0.5} r="0.12" fill="#292524" opacity="0.4" />}
+                  {!showRealistic && <circle cx={line.c1} cy={line.r1} r="0.12" fill="#292524" opacity="0.4" />}
+                  {!showRealistic && <circle cx={line.c2} cy={line.r2} r="0.12" fill="#292524" opacity="0.4" />}
                   <line 
-                    x1={line.c1 + 0.5} 
-                    y1={line.r1 + 0.5} 
-                    x2={line.c2 + 0.5} 
-                    y2={line.r2 + 0.5} 
+                    x1={line.c1} 
+                    y1={line.r1} 
+                    x2={line.c2} 
+                    y2={line.r2} 
                     stroke={line.color} 
                     strokeWidth={showRealistic ? "0.35" : "0.15"} 
                     strokeLinecap="round"
@@ -975,8 +1048,8 @@ export default function App() {
                   />
                   {showRealistic && (
                     <line
-                      x1={line.c1 + 0.5} y1={line.r1 + 0.5}
-                      x2={line.c2 + 0.5} y2={line.r2 + 0.5}
+                      x1={line.c1} y1={line.r1}
+                      x2={line.c2} y2={line.r2}
                       stroke="rgba(255,255,255,0.3)"
                       strokeWidth="0.1"
                       strokeDasharray="0.1 0.2"
@@ -985,42 +1058,59 @@ export default function App() {
                   )}
                 </React.Fragment>
               ))}
-              {currentTool === 'line' && dragStart && dragCurrent && (
-                <React.Fragment>
-                  <circle cx={dragStart.c + 0.5} cy={dragStart.r + 0.5} r="0.12" fill="#292524" opacity="0.4" />
-                  <line 
-                    x1={dragStart.c + 0.5} 
-                    y1={dragStart.r + 0.5} 
-                    x2={dragCurrent.c + 0.5} 
-                    y2={dragCurrent.r + 0.5} 
-                    stroke={currentColor} 
-                    strokeWidth="0.15" 
-                    strokeLinecap="round"
-                    opacity="0.8"
-                  />
-                  {/* Needle */}
-                  <g transform={`translate(${dragCurrent.c + 0.5}, ${dragCurrent.r + 0.5}) rotate(-45)`}>
-                    {/* Thread from hole to eye */}
-                    <path d="M 0 0 Q 1.5 1.0 2.6 0" fill="none" stroke={currentColor} strokeWidth="0.08" opacity="0.8" strokeLinecap="round" />
-                    
-                    {/* Drop shadow for needle */}
-                    <line x1="0.1" y1="0.2" x2="3.1" y2="0.2" stroke="rgba(0,0,0,0.2)" strokeWidth="0.12" strokeLinecap="round" />
-                    
-                    {/* Needle body */}
-                    <line x1="0" y1="0" x2="3" y2="0" stroke="#cbd5e1" strokeWidth="0.14" strokeLinecap="round" />
-                    
-                    {/* Needle tip */}
-                    <polygon points="0,0 0.4,-0.07 0.4,0.07" fill="#cbd5e1" />
-                    
-                    {/* Needle eye (asola) */}
-                    <ellipse cx="2.6" cy="0" rx="0.2" ry="0.04" fill="#334155" />
-                    <ellipse cx="2.6" cy="0" rx="0.1" ry="0.02" fill="#f1f5f9" />
-                    
-                    {/* Thread tail out of the eye */}
-                    <path d="M 2.6 0 Q 3.0 -0.5 3.3 -0.1" fill="none" stroke={currentColor} strokeWidth="0.08" opacity="0.8" strokeLinecap="round" />
-                  </g>
-                </React.Fragment>
-              )}
+              {currentTool === 'line' && dragStart && dragCurrent && (() => {
+                // Snap start and end to nearest holes (corners of cells)
+                const startX = Math.round(dragStart.c + 0.5);
+                const startY = Math.round(dragStart.r + 0.5);
+                
+                let endX = dragCurrent.c + 0.5;
+                let endY = dragCurrent.r + 0.5;
+                
+                if (pointerCoords) {
+                  endX = Math.round(pointerCoords.x);
+                  endY = Math.round(pointerCoords.y);
+                } else {
+                  endX = Math.round(dragCurrent.c + 0.5);
+                  endY = Math.round(dragCurrent.r + 0.5);
+                }
+
+                return (
+                  <React.Fragment>
+                    <circle cx={startX} cy={startY} r="0.15" fill="#292524" opacity="0.6" />
+                    <line 
+                      x1={startX} 
+                      y1={startY} 
+                      x2={endX} 
+                      y2={endY} 
+                      stroke={currentColor} 
+                      strokeWidth="0.15" 
+                      strokeLinecap="round"
+                      opacity="0.8"
+                    />
+                    {/* Needle */}
+                    <g transform={`translate(${endX}, ${endY}) rotate(-45)`}>
+                      {/* Thread from hole to eye */}
+                      <path d="M 0 0 Q 1.5 1.0 2.6 0" fill="none" stroke={currentColor} strokeWidth="0.08" opacity="0.8" strokeLinecap="round" />
+                      
+                      {/* Drop shadow for needle */}
+                      <line x1="0.1" y1="0.2" x2="3.1" y2="0.2" stroke="rgba(0,0,0,0.2)" strokeWidth="0.12" strokeLinecap="round" />
+                      
+                      {/* Needle body */}
+                      <line x1="0" y1="0" x2="3" y2="0" stroke="#cbd5e1" strokeWidth="0.14" strokeLinecap="round" />
+                      
+                      {/* Needle tip */}
+                      <polygon points="0,0 0.4,-0.07 0.4,0.07" fill="#cbd5e1" />
+                      
+                      {/* Needle eye (asola) */}
+                      <ellipse cx="2.6" cy="0" rx="0.2" ry="0.04" fill="#334155" />
+                      <ellipse cx="2.6" cy="0" rx="0.1" ry="0.02" fill="#f1f5f9" />
+                      
+                      {/* Thread tail out of the eye */}
+                      <path d="M 2.6 0 Q 3.0 -0.5 3.3 -0.1" fill="none" stroke={currentColor} strokeWidth="0.08" opacity="0.8" strokeLinecap="round" />
+                    </g>
+                  </React.Fragment>
+                );
+              })()}
               {currentTool === 'symmetry' && dragStart && dragCurrent && (
                 <line 
                   x1={dragStart.c + 0.5} 
