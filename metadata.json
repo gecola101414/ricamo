@@ -1,0 +1,5 @@
+{
+  "name": "Cross Stitch Designer",
+  "description": "An application to create and manage cross-stitch patterns on a grid.",
+  "requestFramePermissions": []
+}
