@@ -1,44 +1,30 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Bot, Send, Loader2, Sparkles, User, FileText, Download, Minimize2, Maximize2, FileSpreadsheet, ShieldAlert } from 'lucide-react';
+import { X, Bot, Send, Loader2, Sparkles, User, FileText, Download, Minimize2, Maximize2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { analyzeProject } from '../services/geminiService';
-import { Article, Category, PriceAnalysis, ProjectInfo } from '../types';
-import { generateTechnicalReportPdf, generateComputoMetricPdf, generateComputoSicurezzaPdf } from '../services/pdfGenerator';
-import { generateComputoExcel } from '../services/excelGenerator';
+import { Article } from '../types';
 
 interface ProjectAnalystModalProps {
   isOpen: boolean;
   onClose: () => void;
   articles: Article[];
-  categories: Category[];
-  analyses: PriceAnalysis[];
-  projectInfo: ProjectInfo;
 }
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
-  action?: {
-    type: string;
-    title: string;
-    payload: any;
-  };
 }
 
 const ProjectAnalystModal: React.FC<ProjectAnalystModalProps> = ({ 
   isOpen, 
   onClose, 
-  articles,
-  categories,
-  analyses,
-  projectInfo
+  articles 
 }) => {
   const [messages, setMessages] = useState<Message[]>([{ role: 'assistant', content: 'Ciao! Sono il tuo analista di progetto IA. Chiedimi pure qualsiasi cosa riguardo al tuo computo metrico: suggerimenti, analisi dei costi, o controlli di coerenza.' }]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isFullScreen, setIsFullScreen] = useState(false);
-  const [quotaExceeded, setQuotaExceeded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -47,23 +33,6 @@ const ProjectAnalystModal: React.FC<ProjectAnalystModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSelectKey = async () => {
-    if ((window as any).aistudio?.openSelectKey) {
-      await (window as any).aistudio.openSelectKey();
-      setQuotaExceeded(false);
-    }
-  };
-
-  const handleAction = (action: any) => {
-    if (action.type === 'PDF_TECHNICAL_REPORT') {
-      generateTechnicalReportPdf(projectInfo, action.title, action.payload);
-    } else if (action.type === 'EXCEL_PROJECT_SUMMARY') {
-      generateComputoExcel(projectInfo, categories, articles);
-    } else if (action.type === 'PDF_SAFETY_ANALYSIS') {
-      generateComputoSicurezzaPdf(projectInfo, categories, articles);
-    }
-  };
-
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
 
@@ -71,54 +40,20 @@ const ProjectAnalystModal: React.FC<ProjectAnalystModalProps> = ({
     setInput('');
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
     setIsLoading(true);
-    setQuotaExceeded(false);
 
     try {
-      const projectData = JSON.stringify({
-        info: projectInfo,
-        articles: articles.map(a => ({ 
-          code: a.code, 
-          description: a.description, 
-          unit: a.unit,
-          unitPrice: a.unitPrice, 
-          quantity: a.quantity,
-          total: (a.quantity || 0) * (a.unitPrice || 0)
-        })),
-        categories: categories.map(c => ({ code: c.code, name: c.name }))
-      });
-      
+      const projectData = JSON.stringify(articles.map(a => ({ 
+        code: a.code, 
+        description: a.description, 
+        unit: a.unit,
+        unitPrice: a.unitPrice, 
+        quantity: a.quantity,
+        total: (a.quantity || 0) * (a.unitPrice || 0)
+      })));
       const response = await analyzeProject(projectData, userMessage);
-      
-      let action = undefined;
-      if (response.functionCalls && response.functionCalls.length > 0) {
-        const fc = response.functionCalls[0];
-        if (fc.name === 'generate_document') {
-          action = {
-            type: fc.args.documentType,
-            title: fc.args.title,
-            payload: fc.args.content
-          };
-        }
-      }
-
-      setMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: response.text,
-        action
-      }]);
-    } catch (error: any) {
-      console.error("Analysis Error:", error);
-      const errorStr = typeof error === 'string' ? error : (error.message || JSON.stringify(error));
-      
-      if (errorStr.includes('RESOURCE_EXHAUSTED') || errorStr.includes('quota') || errorStr.includes('429')) {
-        setQuotaExceeded(true);
-        setMessages(prev => [...prev, { 
-          role: 'assistant', 
-          content: '### ⚠️ Quota Esaurita\nHai esaurito la quota gratuita per l\'utilizzo dell\'IA avanzata.\n\nPer continuare ad utilizzare l\'Analista di Progetto senza limiti, puoi collegare la tua **API Key personale** di Google Cloud (con fatturazione attiva).\n\n[Scopri di più sulla fatturazione Gemini API](https://ai.google.dev/gemini-api/docs/billing)' 
-        }]);
-      } else {
-        setMessages(prev => [...prev, { role: 'assistant', content: 'Si è verificato un errore durante l\'analisi. Riprova più tardi.' }]);
-      }
+      setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+    } catch (error) {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Si è verificato un errore durante l\'analisi. Riprova più tardi.' }]);
     } finally {
       setIsLoading(false);
     }
@@ -177,6 +112,7 @@ const ProjectAnalystModal: React.FC<ProjectAnalystModalProps> = ({
                   </div>
                 ) : (
                   <div className="bg-white border border-slate-200 rounded-2xl rounded-tl-none shadow-sm overflow-hidden">
+                    {/* Report Header Style for Assistant */}
                     <div className="bg-slate-50 border-b border-slate-100 px-5 py-2 flex justify-between items-center">
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
                         <FileText className="w-3 h-3" /> Report Generato
@@ -190,26 +126,6 @@ const ProjectAnalystModal: React.FC<ProjectAnalystModalProps> = ({
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {msg.content}
                       </ReactMarkdown>
-
-                      {msg.action && (
-                        <div className="mt-6 p-4 bg-green-50 rounded-xl border border-green-200 flex items-center justify-between gap-4 animate-in zoom-in-95">
-                          <div className="flex items-center gap-3">
-                            <div className="bg-green-600 p-2 rounded-lg">
-                              {msg.action.type.includes('EXCEL') ? <FileSpreadsheet className="w-5 h-5 text-white" /> : <FileText className="w-5 h-5 text-white" />}
-                            </div>
-                            <div>
-                              <p className="text-xs font-black text-green-900 uppercase leading-none mb-1">{msg.action.title}</p>
-                              <p className="text-[10px] text-green-700 font-medium">Documento pronto per il download</p>
-                            </div>
-                          </div>
-                          <button 
-                            onClick={() => handleAction(msg.action)}
-                            className="bg-green-700 hover:bg-green-800 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all active:scale-95 shadow-md"
-                          >
-                            <Download className="w-4 h-4" /> Scarica
-                          </button>
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}
@@ -244,25 +160,6 @@ const ProjectAnalystModal: React.FC<ProjectAnalystModalProps> = ({
 
         {/* Input Area */}
         <div className="p-6 border-t border-slate-200 bg-white shadow-[0_-4px_20px_-5px_rgba(0,0,0,0.05)]">
-          {quotaExceeded && (
-            <div className="max-w-4xl mx-auto mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-4 animate-in slide-in-from-bottom-2">
-              <div className="flex items-center gap-3">
-                <div className="bg-amber-500 p-2 rounded-lg">
-                  <ShieldAlert className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-amber-900 uppercase">Quota IA Esaurita</p>
-                  <p className="text-[10px] text-amber-700">Collega la tua chiave API per continuare senza limiti</p>
-                </div>
-              </div>
-              <button 
-                onClick={handleSelectKey}
-                className="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all active:scale-95 shadow-md"
-              >
-                <Sparkles className="w-4 h-4" /> Seleziona API Key
-              </button>
-            </div>
-          )}
           <div className="max-w-4xl mx-auto relative flex items-end gap-3">
             <div className="flex-1 relative">
               <textarea
@@ -295,13 +192,13 @@ const ProjectAnalystModal: React.FC<ProjectAnalystModalProps> = ({
             </button>
           </div>
           <div className="mt-3 flex justify-center gap-4">
-            <button onClick={() => setInput("Analizza i costi del progetto e suggerisci ottimizzazioni.")} className="text-[10px] font-bold text-slate-400 hover:text-green-700 uppercase tracking-widest transition-colors flex items-center gap-1">
+            <button className="text-[10px] font-bold text-slate-400 hover:text-green-700 uppercase tracking-widest transition-colors flex items-center gap-1">
               <Sparkles className="w-3 h-3" /> Analisi Costi
             </button>
-            <button onClick={() => setInput("Verifica la coerenza delle descrizioni e delle unità di misura.")} className="text-[10px] font-bold text-slate-400 hover:text-green-700 uppercase tracking-widest transition-colors flex items-center gap-1">
+            <button className="text-[10px] font-bold text-slate-400 hover:text-green-700 uppercase tracking-widest transition-colors flex items-center gap-1">
               <FileText className="w-3 h-3" /> Verifica Coerenza
             </button>
-            <button onClick={() => setInput("Genera un report tecnico PDF riassuntivo del progetto.")} className="text-[10px] font-bold text-slate-400 hover:text-green-700 uppercase tracking-widest transition-colors flex items-center gap-1">
+            <button className="text-[10px] font-bold text-slate-400 hover:text-green-700 uppercase tracking-widest transition-colors flex items-center gap-1">
               <Download className="w-3 h-3" /> Esporta Report
             </button>
           </div>

@@ -1,5 +1,5 @@
 {
-  "name": "GeCoLa AI (VRC)_26_3_c",
+  "name": "GeCoLa AI_25_3_c",
   "description": "A professional construction estimate application (Computo Metrico Estimativo) tailored for Italian standards, featuring dynamic calculations, categorization, and AI-assisted item generation. Visitor limit increased to 15 items.",
   "requestFramePermissions": [
     "microphone"

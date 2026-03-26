@@ -1,9 +1,18 @@
 
 import { Article, Measurement, Category } from '../types';
-import { GoogleGenAI, Type } from "@google/genai";
 
-// Initialize Gemini on the frontend as required by the platform
-const getAi = () => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || process.env.API_KEY || "" });
+const callGeminiApi = async (action: string, payload: any) => {
+  const response = await fetch('/api/gemini', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, payload })
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Errore nella chiamata AI');
+  }
+  return response.json();
+};
 
 const cleanAndParseJson = (text: string) => {
   try {
@@ -32,50 +41,11 @@ export const generateBulkItems = async (
   availableCategories: Category[]
 ): Promise<Partial<Article>[]> => {
   try {
-    const ai = getAi();
     const categoriesList = availableCategories.map(c => `${c.code}: ${c.name}`).join("\n");
-    const bulkPrompt = `Act as an expert Italian Quantity Surveyor.
-    PROJECT CONTEXT: ${userDescription}
-    REGION/YEAR: ${region} ${year}
+    const data = await callGeminiApi('generateBulkItems', { userDescription, region, year, categoriesList });
     
-    TASK: Break down the project into work items mapped strictly to these categories:
-    ${categoriesList}
-
-    Return ONLY a JSON object with an array "items".`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-pro-preview",
-      contents: bulkPrompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            items: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  categoryCode: { type: Type.STRING },
-                  code: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  unit: { type: Type.STRING },
-                  quantity: { type: Type.NUMBER },
-                  unitPrice: { type: Type.NUMBER },
-                  laborRate: { type: Type.NUMBER },
-                  priceListSource: { type: Type.STRING }
-                },
-                required: ["categoryCode", "code", "description", "unit", "quantity", "unitPrice"]
-              }
-            }
-          }
-        }
-      },
-    });
-
-    const parsedData = cleanAndParseJson(response.text || "");
-    const groundingUrls = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const parsedData = cleanAndParseJson(data.text || "");
+    const groundingUrls = data.groundingChunks || [];
 
     return (parsedData?.items || []).map((item: any) => ({
         ...item,
@@ -163,25 +133,8 @@ export const parseDroppedContent = (rawText: string): Partial<Article> | null =>
 
 export const parseVoiceMeasurement = async (transcript: string): Promise<Partial<Measurement>> => {
     try {
-        const ai = getAi();
-        const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: `Extract measurement data from: "${transcript}". Return JSON with description, length, width, height, multiplier.`,
-            config: { 
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  description: { type: Type.STRING },
-                  length: { type: Type.NUMBER },
-                  width: { type: Type.NUMBER },
-                  height: { type: Type.NUMBER },
-                  multiplier: { type: Type.NUMBER }
-                }
-              }
-            }
-        });
-        const parsedData = JSON.parse(response.text || "{}");
+        const data = await callGeminiApi('parseVoiceMeasurement', { transcript });
+        const parsedData = JSON.parse(data.text || "{}");
         return {
             description: cleanDescription(parsedData.description || transcript),
             length: parsedData.length || undefined,
@@ -197,55 +150,10 @@ export const parseVoiceMeasurement = async (transcript: string): Promise<Partial
 export const analyzeProject = async (
   projectData: string,
   question: string
-): Promise<{ text: string; functionCalls?: any[] }> => {
+): Promise<string> => {
   try {
-    const ai = getAi();
-    const analyzePrompt = `Act as an expert Italian Quantity Surveyor and Project Manager Agent.
-    PROJECT CONTEXT (JSON):
-    ${projectData}
-    
-    USER REQUEST:
-    ${question}
-    
-    TASK: Provide a detailed, professional response. 
-    If the user asks for a document, report, or attachment (PDF/Excel), use the 'generate_document' tool.
-    
-    FORMATTING RULES:
-    1. Use Markdown for structure.
-    2. Be proactive: if you see errors or optimizations, suggest them and offer to create a report.
-    3. Your goal is to be a real Project Manager, not just a chatbot.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
-      contents: analyzePrompt,
-      config: {
-        systemInstruction: "You are a professional construction project manager agent. You can generate technical documents and reports. Focus on technical accuracy and Italian standards.",
-        tools: [{
-          functionDeclarations: [{
-            name: "generate_document",
-            description: "Generates a professional document (PDF or Excel) based on the project analysis.",
-            parameters: {
-              type: Type.OBJECT,
-              properties: {
-                documentType: { 
-                  type: Type.STRING, 
-                  enum: ["PDF_TECHNICAL_REPORT", "EXCEL_PROJECT_SUMMARY", "PDF_SAFETY_ANALYSIS"],
-                  description: "The type of document to generate." 
-                },
-                title: { type: Type.STRING, description: "The title of the document." },
-                content: { type: Type.STRING, description: "The detailed content or summary to include in the document (Markdown supported)." }
-              },
-              required: ["documentType", "title", "content"]
-            }
-          }]
-        }]
-      },
-    });
-
-    return {
-      text: response.text || "Mi dispiace, non sono riuscito ad analizzare la tua domanda.",
-      functionCalls: response.functionCalls
-    };
+    const data = await callGeminiApi('analyzeProject', { projectData, question });
+    return data.text || "Mi dispiace, non sono riuscito ad analizzare la tua domanda.";
   } catch (error) {
     console.error("Gemini Analysis Error:", error);
     throw error;
