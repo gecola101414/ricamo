@@ -1,5 +1,7 @@
 {
-  "name": "Cross Stitch Designer",
-  "description": "An application to create and manage cross-stitch patterns on a grid.",
-  "requestFramePermissions": []
+  "name": "GeCoLa AI (VRC)_26_3_c",
+  "description": "A professional construction estimate application (Computo Metrico Estimativo) tailored for Italian standards, featuring dynamic calculations, categorization, and AI-assisted item generation. Visitor limit increased to 15 items.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
 }
