@@ -1,7 +1,10 @@
 {
-  "name": "GeCoLa AI_25_3_c",
-  "description": "A professional construction estimate application (Computo Metrico Estimativo) tailored for Italian standards, featuring dynamic calculations, categorization, and AI-assisted item generation. Visitor limit increased to 15 items.",
+  "name": "Remix:  Gecolacad 10_  BIM azzerato",
+  "description": "parallele funzionano perfettamnete e con il tasto shfr    diventano multiple....adesso proviamo a perfezionare automatismo de i tagli degli spigoli o allumanti",
   "requestFramePermissions": [
     "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }

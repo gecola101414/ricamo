@@ -1,2051 +1,4391 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
-import { 
-  Plus, Trash2, Calculator, FolderOpen, XCircle, ArrowRight, Settings, 
-  PlusCircle, MinusCircle, HelpCircle, Sparkles, AlignLeft, Link as LinkIcon, 
-  Undo2, Redo2, PenLine, Lock, Unlock, Lightbulb, LightbulbOff, Edit2, 
-  GripVertical, Sigma, Save, Loader2, FileText, ChevronDown, TestTubes, 
-  Search, Coins, ArrowRightLeft, Copy, LogOut, Award, User, Maximize2, 
-  Minimize2, GripHorizontal, ArrowLeft, Headset, CopyPlus, Paintbrush, 
-  Grid3X3, MousePointerClick, Layers, ExternalLink, FileSpreadsheet, ShieldAlert, HardHat,
-  Zap, CornerRightDown, ListFilter, EyeOff, ChevronRight, Folder, FolderPlus, Tag, AlertTriangle, Link2Off,
-  ShieldCheck, RefreshCw, FilePlus2, Magnet, MoreVertical, LayoutList, List, Database, Info, ChevronUp,
-  Calendar, Minus, Mic, MousePointer2, Bot
-} from 'lucide-react';
-import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
-import { ref, set, onValue, off } from 'firebase/database';
-import { auth, db } from './firebase';
-import Login from './components/Login';
-import { CATEGORIES, INITIAL_ARTICLES, PROJECT_INFO, INITIAL_ANALYSES, SOA_CATEGORIES, VIVID_COLORS } from './constants';
-import { Article, Totals, ProjectInfo, Measurement, Category, PriceAnalysis } from './types';
-import Summary from './components/Summary';
-import ScheduleView from './components/ScheduleView';
-import ProjectSettingsModal from './components/ProjectSettingsModal';
-import LinkArticleModal from './components/LinkArticleModal';
-import ArticleEditModal from './components/ArticleEditModal';
-import CategoryEditModal from './components/CategoryEditModal';
-import SaveProjectModal from './components/SaveProjectModal';
-import AnalysisEditorModal from './components/AnalysisEditorModal';
-import ImportAnalysisModal from './components/ImportAnalysisModal';
-import WbsImportOptionsModal, { WbsActionMode } from './components/WbsImportOptionsModal';
-import HelpManualModal from './components/HelpManualModal';
-import ProjectAnalystModal from './components/ProjectAnalystModal';
-import RebarCalculatorModal from './components/RebarCalculatorModal';
-import PaintingCalculatorModal from './components/PaintingCalculatorModal';
-import BulkGeneratorModal from './components/BulkGeneratorModal';
-import { parseDroppedContent, parseVoiceMeasurement, generateBulkItems, cleanDescription } from './services/geminiService';
-import { generateComputoMetricPdf, generateComputoSicurezzaPdf, generateElencoPrezziPdf, generateManodoperaPdf, generateAnalisiPrezziPdf } from './services/pdfGenerator';
-import { generateComputoExcel } from './services/excelGenerator';
+import React, { useState, useRef, useEffect } from "react";
+import { Document, Page, pdfjs } from 'react-pdf';
+import { CADCanvas } from "./components/CADCanvas";
+import { CanvasPDFPreview } from "./components/CanvasPDFPreview";
 
-const MIME_ARTICLE = 'application/gecola-article';
-const MIME_MEASUREMENT = 'application/gecola-measurement';
-const MIME_ANALYSIS_ROW = 'application/gecola-analysis-row';
-const MIME_ANALYSIS_DRAG = 'application/gecola-analysis-data';
+pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+import { DimensionStyleDialog } from "./components/DimensionStyleDialog";
+import { RaccordoDialog } from "./components/RaccordoDialog";
+import { DXFTextReaderDialog } from "./components/DXFTextReaderDialog";
+import { TemplatePreview } from "./components/TemplatePreview";
+import { AreaFunzionaleDialog, FinestreDialog } from "./components/BIMDialogs";
+import { BIMWorkspacePanel } from "./components/BIMWorkspacePanel";
+import { BIMTopBarControls } from "./components/BIMTopBarControls";
+import { BIM3DViewer } from "./components/BIM3DViewer";
+import { TEMPLATES } from './data/templates';
+import { GUIDE_DATABASE, GuideItem } from './data/guides';
+import { Entity, Point, Layer, Measurement, Tavola } from "./types";
+import { mergeAllSegments } from "./utils/entityUtils";
+import { parseScriptToEntities, updateScriptVariables } from "./utils/parametricParser";
+import { contours } from "d3-contour";
+import { simplifyPoints } from "./utils/simplify";
+import {
+  Minus,
+  Circle,
+  Square,
+  MousePointer2,
+  Eraser,
+  Sparkles,
+  MoveHorizontal,
+  Scissors,
+  Camera,
+  Ruler,
+  Move,
+  DraftingCompass,
+  History,
+  Dot,
+  Undo,
+  Redo,
+  Printer,
+  Crosshair,
+  Trash2,
+  Link,
+  Copy,
+  Layers,
+  Pen,
+  PenTool,
+  Pencil,
+  Lightbulb,
+  LightbulbOff,
+  Snowflake,
+  Plus,
+  Check,
+  Save,
+  FolderOpen,
+  Type,
+  FileUp,
+  Code,
+  BookOpen,
+  Grid,
+  ExternalLink,
+  X,
+  Building,
+  Lock,
+  Home,
+  Maximize2,
+  Droplet,
+  Zap,
+  ChevronDown,
+  ArrowDown,
+  Clipboard
+} from "lucide-react";
 
-// --- SISTEMA AUDIO OTTIMIZZATO ---
-let globalAudioCtx: AudioContext | null = null;
-
-const playUISound = (type: 'confirm' | 'move' | 'newline' | 'toggle' | 'cycle') => {
-    try {
-        if (!globalAudioCtx) {
-            globalAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        }
-        
-        if (globalAudioCtx.state === 'suspended') {
-            globalAudioCtx.resume();
-        }
-
-        const masterGain = globalAudioCtx.createGain();
-        masterGain.connect(globalAudioCtx.destination);
-        masterGain.gain.setValueAtTime(0, globalAudioCtx.currentTime);
-
-        if (type === 'confirm') {
-            masterGain.gain.linearRampToValueAtTime(0.08, globalAudioCtx.currentTime + 0.005);
-            const osc = globalAudioCtx.createOscillator();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(880, globalAudioCtx.currentTime); 
-            osc.connect(masterGain);
-            osc.start();
-            masterGain.gain.exponentialRampToValueAtTime(0.0001, globalAudioCtx.currentTime + 0.2);
-            osc.stop(globalAudioCtx.currentTime + 0.2);
-        } else if (type === 'move') {
-            masterGain.gain.linearRampToValueAtTime(0.06, globalAudioCtx.currentTime + 0.005);
-            const osc = globalAudioCtx.createOscillator();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(660, globalAudioCtx.currentTime); 
-            osc.connect(masterGain);
-            osc.start();
-            masterGain.gain.exponentialRampToValueAtTime(0.0001, globalAudioCtx.currentTime + 0.08);
-            osc.stop(globalAudioCtx.currentTime + 0.08);
-        } else if (type === 'toggle' || type === 'cycle') {
-            masterGain.gain.linearRampToValueAtTime(0.05, globalAudioCtx.currentTime + 0.005);
-            const osc = globalAudioCtx.createOscillator();
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(type === 'cycle' ? 660 : 440, globalAudioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(type === 'cycle' ? 990 : 880, globalAudioCtx.currentTime + 0.1);
-            osc.connect(masterGain);
-            osc.start();
-            masterGain.gain.exponentialRampToValueAtTime(0.0001, globalAudioCtx.currentTime + 0.15);
-            osc.stop(globalAudioCtx.currentTime + 0.15);
-        } else if (type === 'newline') {
-            masterGain.gain.linearRampToValueAtTime(0.12, globalAudioCtx.currentTime + 0.005);
-            const freqs = [523.25, 659.25, 783.99]; 
-            freqs.forEach((f, i) => {
-                if (!globalAudioCtx) return;
-                const osc = globalAudioCtx.createOscillator();
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(f, globalAudioCtx.currentTime + (i * 0.08));
-                osc.connect(masterGain);
-                osc.start(globalAudioCtx.currentTime + (i * 0.08));
-                osc.stop(globalAudioCtx.currentTime + 0.4);
-            });
-            masterGain.gain.exponentialRampToValueAtTime(0.0001, globalAudioCtx.currentTime + 0.5);
-        }
-    } catch (e) {
-        console.warn("Audio feedback disabled:", e);
-    }
-};
-
-const formatCurrency = (val: number) => {
-  return new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', useGrouping: true }).format(val);
-};
-
-const formatNumber = (val: number | undefined | null) => {
-    if (val === undefined || val === null || val === 0) return '';
-    return val.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true });
-};
-
-const formatResult = (val: number | undefined | null) => {
-    const value = val || 0;
-    return value.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true });
-};
-
-const getWbsNumber = (code: string) => {
-    const match = code.match(/WBS\.(\d+)/);
-    if (match) return parseInt(match[1], 10);
-    const sMatch = code.match(/S\.(\d+)/);
-    if (sMatch) return parseInt(sMatch[1], 10);
-    return code;
-};
-
-const roundTwoDecimals = (num: number) => {
-    return Math.round((num + Number.EPSILON) * 100) / 100;
-};
-
-const getRank = (unit: string) => {
-  const u = unit.toLowerCase().replace(/\s/g, '');
-  if (u.includes('m3') || u.includes('mc') || u.includes('m³')) return 3;
-  if (u.includes('m2') || u.includes('mq') || u.includes('m²')) return 2;
-  if (u === 'm' || u === 'ml' || u.includes('linea') || u.includes('ml.')) return 1;
-  return 0;
-};
-
-const calculateRowValueWithContext = (m: Measurement, targetUnit: string, linkedValue: number = 0, sourceUnit: string = ''): number => {
-  if (m.type === 'subtotal') return 0;
-  
-  const hasLocalDimensions = m.length !== undefined || m.width !== undefined || m.height !== undefined;
-  const hasMultiplier = m.multiplier !== undefined;
-  
-  if (!hasLocalDimensions && !hasMultiplier && !m.linkedArticleId) return 0;
-
-  const mult = hasMultiplier ? m.multiplier! : (hasLocalDimensions || m.linkedArticleId ? 1 : 0);
-  const sign = m.type === 'deduction' ? -1 : 1;
-
-  if (m.linkedArticleId && sourceUnit) {
-    const sRank = getRank(sourceUnit);
-    let localPhysicalFactor = 1;
-    if (sRank < 1) localPhysicalFactor *= (m.length || 1);
-    if (sRank < 2) localPhysicalFactor *= (m.width || 1);
-    if (sRank < 3) localPhysicalFactor *= (m.height || 1);
-    return linkedValue * localPhysicalFactor * mult * sign;
-  }
-
-  const l = m.length === undefined ? 1 : m.length;
-  const w = m.width === undefined ? 1 : m.width;
-  const h = m.height === undefined ? 1 : m.height;
-  
-  const base = hasLocalDimensions ? (l * w * h) : 0;
-  
-  const effectiveBase = (!hasLocalDimensions && mult !== 0) ? 1 : base;
-  return effectiveBase * mult * sign;
-};
-
-const resolveArticleQuantity = (
-  articleId: string, 
-  allArticlesMap: Map<string, Article>, 
-  visited: Set<string> = new Set()
-): number => {
-  if (visited.has(articleId)) return 0;
-  visited.add(articleId);
-  const article = allArticlesMap.get(articleId);
-  if (!article) return 0;
-  return article.measurements.reduce((sum, m) => {
-    let rowVal = 0;
-    if (m.linkedArticleId) {
-       const sourceQty = resolveArticleQuantity(m.linkedArticleId, allArticlesMap, new Set(visited));
-       const sourceArt = allArticlesMap.get(m.linkedArticleId);
-       let finalSourceVal = sourceQty;
-       if (m.linkedType === 'amount' && sourceArt) {
-           finalSourceVal = sourceQty * sourceArt.unitPrice;
-       }
-       rowVal = calculateRowValueWithContext(m, article.unit, finalSourceVal, sourceArt?.unit || '');
-    } else {
-       rowVal = calculateRowValueWithContext(m, article.unit);
-    }
-    return sum + rowVal;
-  }, 0);
-};
-
-const recalculateAllArticles = (articles: Article[]): Article[] => {
-  const articleMap = new Map(articles.map(a => [a.id, a]));
-  return articles.map(art => {
-    const calculatedQty = resolveArticleQuantity(art.id, articleMap);
-    return { ...art, quantity: calculatedQty };
-  });
-};
-
-interface TableHeaderProps {
-    activeColumn: string | null;
-    tariffWidth?: number;
-    isSafety?: boolean;
-}
-
-const TableHeader: React.FC<TableHeaderProps> = ({ activeColumn, tariffWidth, isSafety }) => (
-  <thead className="bg-[#f8f9fa] border-b-2 border-black text-[9px] uppercase font-black text-gray-800 sticky top-0 z-10 shadow-md">
-    <tr>
-      <th className="py-2.5 px-1 text-center w-[30px] border-r border-gray-300">N..</th>
-      <th className="py-2.5 px-1 text-left border-r border-gray-300" style={{ width: tariffWidth ? `${tariffWidth}px` : '135px' }}>Tariffa</th>
-      <th className={`py-2.5 px-1 text-left min-w-[280px] border-r border-gray-300 ${activeColumn === 'desc' ? (isSafety ? 'bg-orange-50 text-orange-900' : 'bg-blue-50 text-blue-900') : ''}`}>Designazione dei Lavori</th>
-      <th className={`py-2.5 px-1 text-center w-[40px] border-r border-gray-300 ${activeColumn === 'mult' ? (isSafety ? 'bg-orange-50 text-orange-900' : 'bg-blue-50 text-blue-900') : ''}`}>Par.Ug.</th>
-      <th className={`py-2.5 px-1 text-center w-[50px] border-r border-gray-300 ${activeColumn === 'len' ? (isSafety ? 'bg-orange-50 text-orange-900' : 'bg-blue-50 text-blue-900') : ''}`}>Lung..</th>
-      <th className={`py-2.5 px-1 text-center w-[50px] border-r border-gray-300 ${activeColumn === 'wid' ? (isSafety ? 'bg-orange-50 text-orange-900' : 'bg-blue-50 text-blue-900') : ''}`}>Larg.</th>
-      <th className={`py-2.5 px-1 text-center w-[50px] border-r border-gray-300 ${activeColumn === 'h' ? (isSafety ? 'bg-orange-50 text-orange-900' : 'bg-blue-50 text-blue-900') : ''}`}>H/Peso</th>
-      <th className="py-2.5 px-1 text-center w-[65px] border-r border-gray-300 bg-gray-100">Quantità</th>
-      <th className="py-2.5 px-1 text-right w-[75px] border-r border-gray-300">Prezzo €</th>
-      <th className="py-2.5 px-1 text-right w-[85px] border-r border-gray-300">Importo €</th>
-      <th className="py-2.5 px-1 text-right w-[75px] border-r border-gray-300">M.O. €</th>
-    </tr>
-  </thead>
+const ParallelIcon = ({ size = 16 }: { size?: number }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="2" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+  >
+    <path d="M5 20L15 4" />
+    <path d="M9 20L19 4" />
+  </svg>
 );
 
-interface ArticleGroupProps {
-  article: Article;
-  index: number;
-  globalIndex: number;
-  allArticles: Article[];
-  isPrintMode: boolean;
-  isCategoryLocked?: boolean;
-  isSurveyorGuardActive: boolean;
-  projectSettings: ProjectInfo;
-  lastMovedItemId: string | null;
-  recordingArticleId: string | null;
-  onUpdateArticle: (id: string, field: keyof Article, value: any) => void;
-  onEditArticleDetails: (article: Article) => void;
-  onUpdateMeasurement: (articleId: string, mId: string, field: keyof Measurement, value: string | number | undefined) => void;
-  onDeleteMeasurement: (articleId: string, mId: string) => void;
-  onAddMeasurement: (articleId: string) => void;
-  onAddSubtotal: (articleId: string) => void;
-  onOpenLinkModal: (articleId: string, measurementId: string) => void;
-  onScrollToArticle: (id: string, fromId?: string) => void;
-  onViewAnalysis: (analysisId: string) => void; 
-  onInsertExternalArticle: (index: number, text: string) => void;
-  onToggleArticleLock: (id: string) => void;
-  onOpenRebarCalculator: (articleId: string) => void;
-  onOpenPaintingCalculator: (articleId: string) => void;
-  onToggleSmartRepeat: (articleId: string) => void;
-  onToggleItemDisplayMode: (articleId: string) => void;
-  onStartVoiceDictation: (articleId: string) => void;
-  smartRepeatActiveId: string | null;
-  onDeleteArticle: (id: string) => void;
-  onArticleDragStart: (e: React.DragEvent, article: Article) => void;
-  onArticleDrop: (e: React.DragEvent, targetArticleId: string, position: 'top' | 'bottom') => void;
-  onArticleDragEnd: () => void;
-  lastAddedMeasurementId: string | null;
-  onColumnFocus: (column: string | null) => void;
-}
+const MirrorIcon = ({ size = 16 }: { size?: number }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="2" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+  >
+    <path d="M10 5L3 12L10 19V5Z" />
+    <line x1="12" y1="2" x2="12" y2="22" strokeDasharray="3 3" />
+    <path d="M14 5L21 12L14 19V5Z" strokeDasharray="2 2" />
+  </svg>
+);
 
-interface FastInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
-  initialValue: string;
-  onCommit: (value: string) => void;
-}
+const RaccordoIcon = ({ size = 16 }: { size?: number }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="2" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+  >
+    <path d="M4 20V12A8 8 0 0 1 12 4H20" />
+    <circle cx="4" cy="20" r="1" fill="currentColor" />
+    <circle cx="20" cy="4" r="1" fill="currentColor" />
+  </svg>
+);
 
-const FastInput: React.FC<FastInputProps> = ({ initialValue, onCommit, ...props }) => {
-  const [val, setVal] = useState(initialValue);
+const OrthoIcon = ({ size = 16 }: { size?: number }) => (
+  <svg 
+    width={size} 
+    height={size} 
+    viewBox="0 0 24 24" 
+    fill="none" 
+    stroke="currentColor" 
+    strokeWidth="2" 
+    strokeLinecap="round" 
+    strokeLinejoin="round"
+  >
+    <path d="M5 5V19H19" />
+    <circle cx="5" cy="5" r="1" fill="currentColor" />
+    <circle cx="19" cy="19" r="1" fill="currentColor" />
+    <path d="M5 19h5v-5H5" strokeWidth="1" strokeDasharray="2,2" />
+  </svg>
+);
 
-  useEffect(() => {
-    setVal(initialValue);
-  }, [initialValue]);
-
-  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    if (props.onBlur) props.onBlur(e);
-    if (val !== initialValue) {
-      onCommit(val);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (props.onKeyDown) props.onKeyDown(e);
-    if (e.key === 'Enter') {
-      if (val !== initialValue) {
-        onCommit(val);
-      }
-    }
-  };
-
-  return (
-    <input
-      {...props}
-      value={val}
-      onChange={(e) => setVal(e.target.value)}
-      onBlur={handleBlur}
-      onKeyDown={handleKeyDown}
-    />
-  );
-};
-
-interface FastNumberInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> {
-  initialValue: number | undefined;
-  onCommit: (value: number | undefined) => void;
-}
-
-const FastNumberInput: React.FC<FastNumberInputProps> = ({ initialValue, onCommit, ...props }) => {
-  const [val, setVal] = useState(initialValue === undefined ? '' : initialValue.toString());
-
-  useEffect(() => {
-    setVal(initialValue === undefined ? '' : initialValue.toString());
-  }, [initialValue]);
-
-  const handleBlur = (e: React.FocusEvent<HTMLInputElement>) => {
-    if (props.onBlur) props.onBlur(e);
-    const normalizedVal = val.replace(',', '.');
-    const numVal = normalizedVal === '' ? undefined : parseFloat(normalizedVal);
-    if (numVal !== initialValue) {
-      onCommit(numVal);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (props.onKeyDown) props.onKeyDown(e);
-    if (e.key === 'Enter') {
-      const normalizedVal = val.replace(',', '.');
-      const numVal = normalizedVal === '' ? undefined : parseFloat(normalizedVal);
-      if (numVal !== initialValue) {
-        onCommit(numVal);
-      }
-    }
-  };
-
-  return (
-    <input
-      {...props}
-      type="text"
-      inputMode="decimal"
-      value={val}
-      onChange={(e) => setVal(e.target.value)}
-      onBlur={handleBlur}
-      onKeyDown={handleKeyDown}
-    />
-  );
-};
-
-const ArticleGroup: React.FC<ArticleGroupProps> = (props) => {
-   const { 
-     article, index, globalIndex, allArticles, isPrintMode, isCategoryLocked, 
-     isSurveyorGuardActive, projectSettings, lastMovedItemId, recordingArticleId, onUpdateArticle, 
-     onEditArticleDetails, onDeleteArticle, onAddMeasurement, onAddSubtotal, 
-     onUpdateMeasurement, onDeleteMeasurement, onOpenLinkModal, onScrollToArticle, 
-     onInsertExternalArticle, onToggleArticleLock, onOpenRebarCalculator, 
-     onOpenPaintingCalculator, onToggleSmartRepeat, onStartVoiceDictation, smartRepeatActiveId, 
-     onViewAnalysis, lastAddedMeasurementId, onColumnFocus, onToggleItemDisplayMode,
-     onArticleDragStart, onArticleDrop, onArticleDragEnd 
-   } = props;
-   
-   const [measurementDragOverId, setMeasurementDragOverId] = useState<string | null>(null);
-   const [isArticleDragOver, setIsArticleDragOver] = useState(false);
-   const [articleDropPosition, setArticleDropPosition] = useState<'top' | 'bottom' | null>(null);
-   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
-   const [touchedRowIds, setTouchedRowIds] = useState<Set<string>>(new Set());
-
-   const addBtnRef = useRef<HTMLButtonElement>(null);
-   const tbodyRef = useRef<HTMLTableSectionElement>(null);
-
-   const isArticleLocked = article.isLocked || false;
-   const areControlsDisabled = isCategoryLocked || isArticleLocked;
-
-   const individualDisplayMode = article.displayMode || 0;
-   const isIndustrialMode = individualDisplayMode === 2; // Patto d'Acciaio
-   const isConciseMode = individualDisplayMode === 1;   // Revisione
-   const isSafetyCategory = article.categoryCode.startsWith('S.');
-
-   const handleCycleLocal = () => {
-       if (isCategoryLocked) return;
-       onToggleItemDisplayMode(article.id);
-   };
-
-   const getSurveyorWarning = (m: Measurement): { msg: string, severity: 'error' | 'warning', isVisible: boolean, isExcess: boolean, missingFields: string[] } | null => {
-      if (!isSurveyorGuardActive || m.type === 'subtotal') return null;
-      
-      const targetRank = getRank(article.unit);
-      if (targetRank === 0) return null; 
-
-      const isCurrentlyFocused = focusedRowId === m.id;
-      const hasAnyLocalData = (m.description || (m.length !== undefined && m.length !== 0) || (m.width !== undefined && m.width !== 0) || (m.height !== undefined && m.height !== 0) || (m.multiplier !== undefined && m.multiplier !== 0));
-      
-      let sourceRank = 0;
-      if (m.linkedArticleId) {
-          const src = allArticles.find(a => a.id === m.linkedArticleId);
-          if (src) sourceRank = getRank(src.unit);
-      }
-
-      const localFields = ['length', 'width', 'height'];
-      const possibleLocalFields = localFields.slice(sourceRank, 3);
-      const filledLocalFields = possibleLocalFields.filter(f => (m as any)[f] !== undefined && (m as any)[f] !== 0 && (m as any)[f] !== null);
-      
-      const totalEffectiveDims = sourceRank + filledLocalFields.length;
-
-      if (totalEffectiveDims > targetRank) {
-          return { 
-              msg: `COERENZA: Rilevate ${totalEffectiveDims} dimensioni. Per ${article.unit} ne bastano ${targetRank}.`, 
-              severity: 'error', 
-              isVisible: true,
-              isExcess: true,
-              missingFields: []
-          };
-      }
-      
-      const isVisibleWarning = totalEffectiveDims < targetRank && (!!m.linkedArticleId || (!isCurrentlyFocused && hasAnyLocalData && touchedRowIds.has(m.id)));
-      
-      if (totalEffectiveDims < targetRank) {
-          const missing = possibleLocalFields.filter(f => !filledLocalFields.includes(f));
-          return { 
-              msg: `CONTABILITÀ: Mancano ${targetRank - totalEffectiveDims} dimensioni per soddisfare l'unità ${article.unit}.`, 
-              severity: 'warning', 
-              isVisible: isVisibleWarning,
-              isExcess: false,
-              missingFields: missing
-          };
-      }
-
-      return null;
-   };
-
-   const getInheritedFields = (m: Measurement): string[] => {
-       if (!m.linkedArticleId) return [];
-       const src = allArticles.find(a => a.id === m.linkedArticleId);
-       if (!src) return [];
-       const sourceRank = getRank(src.unit);
-       const fields = [];
-       if (sourceRank >= 1) fields.push('length');
-       if (sourceRank >= 2) fields.push('width');
-       if (sourceRank >= 3) fields.push('height');
-       return fields;
-   };
-
-   useEffect(() => {
-     if (lastAddedMeasurementId === 'ADD_BUTTON_FOCUS' + article.id) {
-         addBtnRef.current?.focus();
-     }
-   }, [lastAddedMeasurementId, article.id]);
-
-   const handleMeasKeyDown = (e: React.KeyboardEvent, mId: string, currentField: string, isLastRow: boolean) => {
-      const fieldList = ['description', 'multiplier', 'length', 'width', 'height'];
-      const fieldIdx = fieldList.indexOf(currentField);
-      const rowIdx = article.measurements.findIndex(m => m.id === mId);
-
-      if (e.key === 'ArrowDown') {
-          e.preventDefault(); 
-          if (rowIdx < article.measurements.length - 1) {
-              const nextRowId = article.measurements[rowIdx + 1].id;
-              const target = document.querySelector(`[data-m-id="${nextRowId}"][data-field="${currentField}"]`) as HTMLElement;
-              if (target) { target.focus(); playUISound('move'); }
-          }
-      } else if (e.key === 'ArrowUp') {
-          e.preventDefault(); 
-          if (rowIdx > 0) {
-              const prevRowId = article.measurements[rowIdx - 1].id;
-              const target = document.querySelector(`[data-m-id="${prevRowId}"][data-field="${currentField}"]`) as HTMLElement;
-              if (target) { target.focus(); playUISound('move'); }
-          }
-      }
-
-      if (e.key === 'Enter' && isLastRow && currentField === 'height') {
-          e.preventDefault();
-          onAddMeasurement(article.id);
-          playUISound('newline');
-      }
-   };
-
-   const getLinkedInfo = (m: Measurement) => {
-     if (!m.linkedArticleId) return null;
-     const linkedArt = allArticles.find(a => a.id === m.linkedArticleId);
-     return linkedArt;
-   };
-
-   const getLinkedArticleNumber = (linkedArt: Article) => {
-       const catArticles = allArticles.filter(a => a.id && a.categoryCode === linkedArt.categoryCode);
-       const localIndex = catArticles.findIndex(a => a.id === linkedArt.id) + 1;
-       const wbsNum = getWbsNumber(linkedArt.categoryCode);
-       return `${wbsNum}.${localIndex}`;
-   };
-
-   let runningPartialSum = 0;
-   const processedMeasurements = article.measurements.map(m => {
-        let val = 0;
-        if (m.type !== 'subtotal') {
-            if (m.linkedArticleId) {
-                const linkedArt = allArticles.find(a => a.id === m.linkedArticleId);
-                if (linkedArt) {
-                    const baseVal = m.linkedType === 'amount' ? (linkedArt.quantity * linkedArt.unitPrice) : linkedArt.quantity;
-                    val = calculateRowValueWithContext(m, article.unit, baseVal, linkedArt.unit);
-                }
-            } else {
-                val = calculateRowValueWithContext(m, article.unit);
-            }
-        }
-        let displayValue = 0;
-        if (m.type === 'subtotal') {
-            displayValue = runningPartialSum;
-            runningPartialSum = 0;
-        } else {
-            displayValue = val;
-            runningPartialSum += val;
-        }
-        return { ...m, calculatedValue: val, displayValue };
-   });
-
-   const totalAmount = article.quantity * article.unitPrice;
-   const laborValue = totalAmount * (article.laborRate / 100);
-   const wbsNumber = getWbsNumber(article.categoryCode);
-   const hierarchicalNumber = `${wbsNumber}.${index + 1}`;
-   const isAnalysisLinked = !!article.linkedAnalysisId;
-
-   const handleArticleHeaderDragStart = (e: React.DragEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
-        e.preventDefault();
-        return;
-      }
-      onArticleDragStart(e, article);
-   };
-
-   const handleTbodyDragOver = (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const isInternal = e.dataTransfer.types.includes(MIME_ARTICLE);
-      const isExternalText = e.dataTransfer.types.includes('text/plain');
-      const isAnalysisDrag = e.dataTransfer.types.includes(MIME_ANALYSIS_DRAG);
-      
-      if (isInternal || isExternalText || isAnalysisDrag) {
-          e.dataTransfer.dropEffect = 'copy';
-          if (isCategoryLocked) return;
-          const rect = tbodyRef.current?.getBoundingClientRect();
-          if (rect) {
-            const midPoint = rect.top + rect.height / 2;
-            const isTop = e.clientY < midPoint;
-            setArticleDropPosition(isTop ? 'top' : 'bottom');
-            setIsArticleDragOver(true);
-          }
-      }
-   };
-
-   const handleTbodyDragLeave = (e: React.DragEvent) => {
-       const rect = tbodyRef.current?.getBoundingClientRect();
-       if (rect) {
-         if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
-            setIsArticleDragOver(false);
-            setArticleDropPosition(null);
-         }
-       }
-   };
-
-   const handleTbodyDrop = (e: React.DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (isCategoryLocked) {
-          setIsArticleDragOver(false);
-          setArticleDropPosition(null);
-          return;
-      }
-      const isInternal = e.dataTransfer.types.includes(MIME_ARTICLE);
-      const droppedId = e.dataTransfer.getData('articleId');
-      const textData = e.dataTransfer.getData('text/plain');
-
-      if (isInternal && droppedId) {
-          onArticleDrop(e, article.id, articleDropPosition || 'bottom');
-      } else if (textData) {
-          const insertionIndex = articleDropPosition === 'bottom' ? index + 1 : index;
-          onInsertExternalArticle(insertionIndex, textData);
-      }
-      setIsArticleDragOver(false);
-      setArticleDropPosition(null);
-   };
-
-   const handleFocusRow = (mId: string) => {
-       setFocusedRowId(mId);
-       setTouchedRowIds(prev => new Set(prev).add(mId));
-   };
-
-   const handleToggleDeduction = (mId: string) => {
-       const m = article.measurements.find(meas => meas.id === mId);
-       if (!m) return;
-       const newType = m.type === 'deduction' ? 'positive' : 'deduction';
-       
-       let newDesc = m.description;
-       const prefix = 'A dedurre: ';
-       if (newType === 'deduction') {
-           if (!newDesc.startsWith(prefix)) newDesc = prefix + newDesc;
-       } else {
-           if (newDesc.startsWith(prefix)) newDesc = newDesc.substring(prefix.length);
-       }
-       
-       onUpdateMeasurement(article.id, mId, 'type', newType);
-       onUpdateMeasurement(article.id, mId, 'description', newDesc);
-       playUISound('toggle');
-   };
-
-   const descFontSize = 15.5; 
-
-   return (
-       <tbody 
-        ref={tbodyRef}
-        id={`article-${article.id}`} 
-        style={{ scrollMarginTop: '60px' }}
-        className={`article-block group/article ${isArticleLocked ? 'opacity-80' : ''} ${isArticleDragOver ? (isSafetyCategory ? 'ring-2 ring-orange-500 ring-inset' : 'ring-2 ring-blue-500 ring-inset') : ''} ${lastMovedItemId === article.id ? 'highlight-move' : ''}`}
-        onDragOver={handleTbodyDragOver}
-        onDragLeave={handleTbodyDragLeave}
-        onDrop={handleTbodyDrop}
-      >
-         <tr 
-            className={`align-top article-header-row ${!isPrintMode ? 'cursor-pointer' : ''} ${isIndustrialMode ? 'bg-slate-100' : ''}`}
-            draggable={!isPrintMode && !areControlsDisabled}
-            onDragStart={handleArticleHeaderDragStart}
-            onDragEnd={onArticleDragEnd}
-            onClick={handleCycleLocal}
-         >
-            <td className="text-center py-2 px-2 border-r border-gray-200">
-                <div className="flex flex-col items-center gap-1">
-                    <span className="object-id-badge">{globalIndex}</span>
-                    <span className="text-[9px] font-bold text-slate-400 font-mono tracking-tighter">{hierarchicalNumber}</span>
-                </div>
-            </td>
-            <td className={`p-1 border-r border-gray-200 align-top ${isIndustrialMode ? 'bg-slate-100/50' : 'bg-white'}`} style={{ width: projectSettings.tariffColumnWidth ? `${projectSettings.tariffColumnWidth}px` : '135px' }}>
-               <div className="flex flex-col relative">
-                <textarea 
-                    readOnly
-                    value={article.code}
-                    className={`font-mono font-bold text-xs w-full bg-transparent border-none px-1 resize-y overflow-hidden leading-tight disabled:text-gray-400 cursor-default focus:ring-0 ${isAnalysisLinked ? 'text-purple-700' : ''} ${isArticleLocked ? 'text-gray-400' : ''} ${isIndustrialMode ? 'text-indigo-800' : ''}`}
-                    rows={isIndustrialMode ? 1 : 2}
-                    placeholder="Codice"
-                    disabled={true}
-                />
-                {isAnalysisLinked && !isPrintMode && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); article.linkedAnalysisId && onViewAnalysis(article.linkedAnalysisId); }}
-                    className="absolute right-0 top-0 text-purple-600 hover:text-purple-800 hover:bg-purple-50 p-1 rounded transition-colors z-10"
-                    title="Apri Analisi Prezzo"
-                  >
-                    <TestTubes className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                {(individualDisplayMode > 0 || article.priceListSource) && !isIndustrialMode && (
-                   <div className="text-[9px] text-gray-400 px-1 mt-1 leading-tight truncate max-w-full" title={article.priceListSource}>{article.priceListSource || 'Prezzario N/D'}</div>
-                )}
-                {!isIndustrialMode && article.soaCategory && (
-                    <div className="text-[9px] text-gray-400 px-1 italic leading-tight" title={`Categoria SOA: ${article.soaCategory}`}>
-                        ({article.soaCategory})
-                    </div>
-                )}
-               </div>
-            </td>
-            <td className={`p-1 border-r border-gray-200 ${isIndustrialMode ? 'bg-slate-100/50' : 'bg-white'}`}>
-               {isPrintMode || isConciseMode || isIndustrialMode ? (
-                 <p className={`leading-relaxed font-serif text-justify px-0.5 whitespace-pre-wrap ${isIndustrialMode ? 'line-clamp-1 italic font-bold text-slate-600' : isConciseMode ? 'line-clamp-2' : ''} ${!isIndustrialMode && isSafetyCategory ? 'text-orange-600' : !isIndustrialMode ? 'text-blue-700' : ''}`} style={{ fontSize: `${descFontSize}px` }}>{article.description}{isIndustrialMode ? ' ...' : ''}</p>
-               ) : (
-                 <textarea 
-                    readOnly
-                    value={article.description}
-                    rows={isArticleLocked ? 2 : 4}
-                    className={`w-full font-serif text-justify border-none focus:ring-0 bg-transparent resize-y p-0.5 disabled:text-gray-400 cursor-default scrollbar-hide ${isArticleLocked ? 'text-gray-400 italic' : 'min-h-[50px]'} ${isSafetyCategory ? 'text-orange-600' : 'text-blue-700'}`}
-                    style={{ fontSize: `${descFontSize}px` }}
-                    placeholder="Descrizione..."
-                    disabled={true}
-                 />
-               )}
-            </td>
-            <td className={`border-r border-gray-200 ${isIndustrialMode ? 'bg-slate-100/50' : 'bg-white'} p-1 text-center align-top`}>
-                {!isPrintMode && !isCategoryLocked && (
-                   <div className="flex flex-col items-center gap-1 mt-1">
-                      <button onClick={(e) => { e.stopPropagation(); onToggleArticleLock(article.id); }} className={`transition-colors p-0.5 rounded ${isArticleLocked ? 'text-red-500 hover:text-red-700 bg-red-50' : 'text-gray-400 hover:text-blue-50'}`} title={isArticleLocked ? "Sblocca Voce" : "Blocca Voce (Lavoro Fatto)"}>
-                          {isArticleLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
-                      </button>
-                      {!isArticleLocked && individualDisplayMode === 0 && (
-                          <div className="opacity-0 group-hover/article:opacity-100 transition-opacity flex flex-col items-center gap-1">
-                            <button onClick={(e) => { e.stopPropagation(); onEditArticleDetails(article); }} className="text-gray-400 hover:text-blue-600 transition-colors p-0.5" title="Modifica Dettagli"><PenLine className="w-3.5 h-3.5" /></button>
-                            <button onClick={(e) => { e.stopPropagation(); onDeleteArticle(article.id); }} className="text-gray-400 hover:text-red-600 transition-colors p-0.5" title="Elimina Voce"><Trash2 className="w-3.5 h-3.5" /></button>
-                          </div>
-                      )}
-                   </div>
-                )}
-            </td>
-            <td colSpan={7} className={`${isIndustrialMode ? 'bg-slate-100/30 border-r border-slate-200' : 'bg-white border-r border-gray-200'}`}></td>
-         </tr>
-         {!isArticleLocked && !isIndustrialMode && (
-           <>
-            <tr className="bg-gray-50/50 border-b border-gray-100">
-                <td className="border-r border-gray-200"></td><td className="border-r border-gray-200"></td>
-                <td className={`px-1.5 py-1 text-[9px] font-black uppercase tracking-widest border-r border-gray-200 bg-white/50 flex items-center gap-2 ${isSafetyCategory ? 'text-orange-600' : 'text-blue-600'}`}>
-                    <span className="font-black">ELENCO MISURE:</span>
-                    <div className="flex items-center gap-2">
-                        <button onClick={() => onOpenPaintingCalculator(article.id)} className={`text-gray-400 p-1 rounded transition-colors ${isSafetyCategory ? 'hover:text-orange-600' : 'hover:text-blue-600'}`} title="Calcolo Automatico Pitturazioni"><Paintbrush className="w-4 h-4" /></button>
-                        <button onClick={() => onOpenRebarCalculator(article.id)} className="text-gray-400 hover:text-orange-600 p-1 rounded transition-colors" title="Calcolo Ferri d'Armatura"><Grid3X3 className="w-4 h-4" /></button>
-                        <button onClick={() => onToggleSmartRepeat(article.id)} className={`p-1 rounded transition-all ${smartRepeatActiveId === article.id ? (isSafetyCategory ? 'bg-orange-600 text-white shadow-lg shadow-orange-200' : 'bg-blue-600 text-white shadow-lg shadow-blue-200') : (isSafetyCategory ? 'text-gray-400 hover:text-orange-600' : 'text-gray-400 hover:text-blue-600')}`} title="Smart Repeat (Clona rigo precedente)"><CopyPlus className="w-4 h-4" /></button>
-                        {/* PATTO DI FERRO: RIPRISTINO FUNZIONE CUFFIE */}
-                        <button 
-                            onClick={() => onStartVoiceDictation(article.id)} 
-                            className={`p-1 rounded transition-all ${recordingArticleId === article.id ? 'bg-purple-600 text-white animate-pulse shadow-lg' : 'text-gray-400 hover:text-purple-600 hover:bg-purple-50'}`} 
-                            title="Dettatura Vocale (Cuffie)"
-                        >
-                            <Headset className="w-4 h-4" />
-                        </button>
-                    </div>
-                </td>
-                <td colSpan={8} className="border-r border-gray-200"></td>
-            </tr>
-            {processedMeasurements.map((m, idx) => {
-                const linkedArt = getLinkedInfo(m);
-                const isSubtotal = m.type === 'subtotal';
-                const isDeduction = m.type === 'deduction';
-                const guard = getSurveyorWarning(m);
-                const isError = guard?.severity === 'error';
-                const isLastMeasRow = idx === processedMeasurements.length - 1;
-                
-                const inheritedFields = getInheritedFields(m);
-                const missingFields = guard?.isVisible ? guard.missingFields : [];
-
-                return (
-                <tr key={m.id} draggable={!isPrintMode && !areControlsDisabled} className={`group/row cursor-default transition-all ${isSubtotal ? 'bg-yellow-50 font-bold' : ''} ${measurementDragOverId === m.id ? 'border-t-2 border-dashed border-green-500 bg-green-50' : (isSubtotal ? 'bg-yellow-50' : (isDeduction ? 'bg-red-50' : 'bg-white'))} ${isArticleLocked ? 'opacity-70' : ''}`} style={{ fontSize: `13.5px` }}>
-                    <td className="border-r border-gray-200"></td>
-                    <td className="p-0 border-r border-gray-200 bg-gray-50/30 text-center relative align-middle">
-                        {!isPrintMode && !areControlsDisabled && (
-                            <div className="flex justify-center items-center gap-1.5 opacity-0 group-hover/row:opacity-100 transition-opacity px-1 h-full py-1.5">
-                                {!isSubtotal ? (
-                                    <>
-                                        <button onClick={() => onOpenLinkModal(article.id, m.id)} className={`rounded p-0.5 transition-colors ${m.linkedArticleId ? (isSafetyCategory ? 'bg-orange-600 text-white hover:bg-orange-700' : 'bg-blue-600 text-white hover:bg-blue-700') : (isSafetyCategory ? 'text-gray-300 hover:text-orange-600 hover:bg-orange-50' : 'text-gray-300 hover:text-blue-600 hover:bg-blue-50')}`} title={m.linkedArticleId ? "Modifica Collegamento" : "Vedi Voce (Collega)"}><LinkIcon className="w-4 h-4" /></button>
-                                        <button onClick={() => handleToggleDeduction(m.id)} className={`rounded p-0.5 transition-colors ${isDeduction ? 'bg-red-600 text-white hover:bg-red-700' : (isSafetyCategory ? 'text-gray-300 hover:text-red-600 hover:bg-red-50' : 'text-gray-300 hover:text-red-600 hover:bg-red-50')}`} title={isDeduction ? "Rendi Positivo" : "A Dedurre"}><MinusCircle className="w-4 h-4" /></button>
-                                    </>
-                                ) : null}
-                                <button onClick={() => onDeleteMeasurement(article.id, m.id)} className="text-gray-300 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors" title="Elimina Rigo"><Trash2 className="w-4 h-4" /></button>
-                            </div>
-                        )}
-                    </td>
-                    <td className={`pl-3 pr-1 py-1 border-r border-gray-200 relative flex items-center gap-2 ${isDeduction ? 'text-red-700 font-bold' : ''}`}>
-                        {isSubtotal ? <div className="italic text-gray-600 text-right pr-2 w-full font-black">Sommano parziale</div> : (
-                            <>
-                                <div className={`absolute left-0 top-1/2 w-4 h-[1px] ${isDeduction ? 'bg-red-300' : 'bg-gray-300'}`}></div>
-                                {m.linkedArticleId && linkedArt ? (
-                                <div className="flex items-center space-x-2">
-                                    <button onClick={() => onScrollToArticle(linkedArt.id, article.id)} className={`flex items-center space-x-1 px-1 py-0.5 rounded group/link transition-colors text-left ${isSafetyCategory ? 'hover:bg-orange-50' : 'hover:bg-blue-50'}`}>
-                                        <span className={`font-bold hover:underline cursor-pointer ${isDeduction ? 'text-red-800' : (isSafetyCategory ? 'text-orange-600' : 'text-blue-600')}`} style={{ fontSize: `12.5px` }}>
-                                            {isDeduction ? 'A dedurre: ' : ''}Vedi voce n. {getLinkedArticleNumber(linkedArt)}
-                                        </span>
-                                        <span className={`${isDeduction ? 'text-red-500/60' : 'text-gray-500'}`} style={{ fontSize: `11.5px` }}>
-                                            ({m.linkedType === 'amount' ? formatCurrency(linkedArt.quantity * linkedArt.unitPrice) : `${formatResult(linkedArt.quantity)} ${linkedArt.unit}`})
-                                        </span>
-                                        <LinkIcon className={`w-4 h-4 opacity-0 group-hover/link:opacity-100 transition-opacity ${isDeduction ? 'text-red-400' : (isSafetyCategory ? 'text-orange-400' : 'text-blue-400')}`} />
-                                    </button>
-                                    </div>
-                                ) : (
-                                    isPrintMode ? <div className={`truncate ${isDeduction ? 'text-red-700 font-bold' : 'text-gray-800'}`}>{m.description}</div> : (
-                                        <div className="flex-1 flex items-center gap-2 relative">
-                                            <FastInput 
-                                            initialValue={m.description} 
-                                            onCommit={(val) => onUpdateMeasurement(article.id, m.id, 'description', val)}
-                                            data-m-id={m.id}
-                                            data-field="description"
-                                            autoFocus={m.id === lastAddedMeasurementId} 
-                                            onFocus={() => { onColumnFocus('desc'); handleFocusRow(m.id); }} 
-                                            onBlur={() => { onColumnFocus(null); setFocusedRowId(null); }} 
-                                            onKeyDown={(e) => handleMeasKeyDown(e, m.id, 'description', isLastMeasRow)}
-                                            className={`w-full bg-transparent border-none p-0 focus:ring-0 placeholder-gray-300 disabled:cursor-not-allowed ${isDeduction ? 'text-red-800 font-bold' : 'text-gray-800'}`} 
-                                            style={{ fontSize: `13.5px` }} 
-                                            placeholder={"Descrizione misura..."} 
-                                            disabled={areControlsDisabled}
-                                            />
-                                        </div>
-                                    )
-                                )}
-                                {guard && guard.isVisible && (
-                                    <div className="group/warning relative flex-shrink-0 ml-auto">
-                                        <HelpCircle className={`w-3.5 h-3.5 ${isError ? 'text-red-600' : 'text-amber-500'} animate-pulse cursor-help`} />
-                                        <div className="absolute bottom-full mb-2 right-0 w-72 bg-slate-900 text-white text-[10px] p-3 rounded-xl shadow-2xl opacity-0 group-hover/warning:opacity-100 pointer-events-none transition-all z-[9999] border border-white/10 ring-1 ring-black">
-                                            <span className={`font-black uppercase block mb-1 tracking-widest ${isError ? 'text-red-400' : 'text-amber-400'}`}>
-                                                {isError ? 'Errore Coerenza' : 'Supporto Coerenza'}
-                                            </span>
-                                            {guard.msg}
-                                        </div>
-                                    </div>
-                                )}
-                            </>
-                        )}
-                    </td>
-                    <td className={`border-r border-gray-200 p-0 transition-colors ${isDeduction ? 'bg-red-50' : 'bg-gray-50'}`}>
-                        {!isPrintMode && !isSubtotal ? <FastNumberInput data-m-id={m.id} data-field="multiplier" disabled={areControlsDisabled} onFocus={() => { onColumnFocus('mult'); handleFocusRow(m.id); }} onBlur={() => { onColumnFocus(null); setFocusedRowId(null); }} onKeyDown={(e) => handleMeasKeyDown(e, m.id, 'multiplier', isLastMeasRow)} className={`w-full text-center bg-transparent border-none text-xs focus:bg-white placeholder-gray-300 disabled:cursor-not-allowed h-full ${isDeduction ? 'text-red-800 font-black' : ''}`} style={{ fontSize: `13.5px` }} initialValue={m.multiplier} onCommit={(val) => onUpdateMeasurement(article.id, m.id, 'multiplier', val)} /> : (m.multiplier && <div className={`text-center ${isDeduction ? 'text-red-800 font-black' : ''}`}>{m.multiplier}</div>)}
-                    </td>
-                    <td className={`border-r border-gray-200 p-0 transition-all duration-300 relative 
-                        ${inheritedFields.includes('length') ? 'bg-slate-100' : 
-                          (isSurveyorGuardActive && guard?.isVisible && guard?.isExcess ? 'excess-cell' : 
-                          (missingFields.includes('length') ? 'missing-field-glow' : (isDeduction ? 'bg-red-50' : 'bg-gray-50')))}`}>
-                        {isSubtotal ? <div className="text-center text-gray-300">-</div> : (
-                             !isPrintMode ? <FastNumberInput data-m-id={m.id} data-field="length" 
-                                disabled={areControlsDisabled || inheritedFields.includes('length')} 
-                                onFocus={() => { onColumnFocus('len'); handleFocusRow(m.id); }} 
-                                onBlur={() => { onColumnFocus(null); setFocusedRowId(null); }} 
-                                onKeyDown={(e) => handleMeasKeyDown(e, m.id, 'length', isLastMeasRow)} 
-                                className={`w-full text-center bg-transparent border-none text-xs focus:bg-white disabled:cursor-not-allowed h-full 
-                                    ${isDeduction ? 'text-red-800 font-black' : ''} 
-                                    ${isSurveyorGuardActive && guard?.isVisible && guard?.isExcess && m.length ? 'excess-error' : ''}
-                                    ${inheritedFields.includes('length') ? 'text-slate-400 italic font-bold' : ''}
-                                    ${missingFields.includes('length') ? 'placeholder:text-blue-300 font-black' : ''}`} 
-                                style={{ fontSize: `13.5px` }} 
-                                placeholder={missingFields.includes('length') ? "!" : ""}
-                                initialValue={m.length} 
-                                onCommit={(val) => onUpdateMeasurement(article.id, m.id, 'length', val)} 
-                             /> : <div className={`text-center ${isDeduction ? 'text-red-800 font-black' : ''}`}>{formatResult(m.length)}</div>
-                        )}
-                    </td>
-                    <td className={`border-r border-gray-200 p-0 transition-all duration-300 relative 
-                        ${inheritedFields.includes('width') ? 'bg-slate-100' : 
-                          (isSurveyorGuardActive && guard?.isVisible && guard?.isExcess ? 'excess-cell' : 
-                          (missingFields.includes('width') ? 'missing-field-glow' : (isDeduction ? 'bg-red-50' : 'bg-gray-50')))}`}>
-                        {isSubtotal ? <div className="text-center text-gray-300">-</div> : (
-                             !isPrintMode ? <FastNumberInput data-m-id={m.id} data-field="width" 
-                                disabled={areControlsDisabled || inheritedFields.includes('width')} 
-                                onFocus={() => { onColumnFocus('wid'); handleFocusRow(m.id); }} 
-                                onBlur={() => { onColumnFocus(null); setFocusedRowId(null); }} 
-                                onKeyDown={(e) => handleMeasKeyDown(e, m.id, 'width', isLastMeasRow)} 
-                                className={`w-full text-center bg-transparent border-none text-xs focus:bg-white disabled:cursor-not-allowed h-full 
-                                    ${isDeduction ? 'text-red-800 font-black' : ''} 
-                                    ${isSurveyorGuardActive && guard?.isVisible && guard?.isExcess && m.width ? 'excess-error' : ''}
-                                    ${inheritedFields.includes('width') ? 'text-slate-400 italic font-bold' : ''}
-                                    ${missingFields.includes('width') ? 'placeholder:text-blue-300 font-black' : ''}`} 
-                                style={{ fontSize: `13.5px` }} 
-                                placeholder={missingFields.includes('width') ? "!" : ""}
-                                initialValue={m.width} 
-                                onCommit={(val) => onUpdateMeasurement(article.id, m.id, 'width', val)} 
-                             /> : <div className={`text-center ${isDeduction ? 'text-red-800 font-black' : ''}`}>{formatResult(m.width)}</div>
-                        )}
-                    </td>
-                    <td className={`border-r border-gray-200 p-0 transition-all duration-300 relative 
-                        ${inheritedFields.includes('height') ? 'bg-slate-100' : 
-                          (isSurveyorGuardActive && guard?.isVisible && guard?.isExcess ? 'excess-cell' : 
-                          (missingFields.includes('height') ? 'missing-field-glow' : (isDeduction ? 'bg-red-50' : 'bg-gray-50')))}`}>
-                        {isSubtotal ? <div className="text-center text-gray-300">-</div> : (
-                             !isPrintMode ? (
-                                    <div className="h-full w-full relative">
-                                        <FastNumberInput data-m-id={m.id} data-field="height" data-last-meas-field="true" 
-                                            disabled={areControlsDisabled || inheritedFields.includes('height')} 
-                                            onFocus={() => { onColumnFocus('h'); handleFocusRow(m.id); }} 
-                                            onBlur={() => { onColumnFocus(null); setFocusedRowId(null); }} 
-                                            onKeyDown={(e) => handleMeasKeyDown(e, m.id, 'height', isLastMeasRow)} 
-                                            className={`w-full text-center bg-transparent border-none text-xs focus:bg-white disabled:cursor-not-allowed h-full 
-                                                ${isDeduction ? 'text-red-800 font-black' : ''} 
-                                                ${isSurveyorGuardActive && guard?.isVisible && guard?.isExcess && m.height ? 'excess-error' : ''}
-                                                ${inheritedFields.includes('height') ? 'text-slate-400 italic font-bold' : ''}
-                                                ${missingFields.includes('height') ? 'placeholder:text-blue-300 font-black' : ''}`} 
-                                            style={{ fontSize: `13.5px` }} 
-                                            placeholder={missingFields.includes('height') ? "!" : ""}
-                                            initialValue={m.height} 
-                                            onCommit={(val) => onUpdateMeasurement(article.id, m.id, 'height', val)} 
-                                        />
-                                    </div>
-                                ) : <div className={`text-center ${isDeduction ? 'text-red-800 font-black' : ''}`}>{formatResult(m.height)}</div>
-                        )}
-                    </td>
-                    <td className={`border-r border-gray-200 text-right font-mono pr-1 ${isSubtotal ? 'bg-yellow-100 text-black border-t border-b border-gray-400 font-black' : (isDeduction ? 'bg-red-100 text-red-900 font-black' : 'bg-white')} ${m.linkedArticleId ? 'font-bold' : ''} text-gray-600`} style={{ fontSize: `13.5px` }}>{formatResult(m.displayValue)}</td>
-                    <td className="border-r border-gray-200"></td><td className="border-r border-gray-200"></td><td className="border-r border-gray-200"></td>
-                </tr>
-                );})}
-           </>
-         )}
-
-          <tr className={`font-bold text-xs transition-all duration-300 ${isIndustrialMode ? 'bg-slate-100 text-slate-900' : 'bg-white'}`}>
-             <td className="border-r border-gray-200"></td>
-             <td className="border-r border-gray-200" style={{ width: projectSettings.tariffColumnWidth ? `${projectSettings.tariffColumnWidth}px` : '135px' }}></td>
-             <td className={`px-2 py-3 text-left border-r border-gray-200 flex items-center gap-3 ${isIndustrialMode ? 'border-slate-200' : ''}`}>
-                {!isPrintMode && !isIndustrialMode && !isArticleLocked && (
-                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                        <button ref={addBtnRef} onClick={(e) => { e.stopPropagation(); onAddMeasurement(article.id); }} className={`w-6 h-6 rounded-full flex items-center justify-center transition-all border shadow-sm focus:ring-2 focus:outline-none ${isSafetyCategory ? 'text-orange-600 hover:text-white hover:bg-orange-600 border-orange-200 hover:border-orange-600 focus:ring-orange-400' : 'text-blue-600 hover:text-white hover:bg-blue-600 border-blue-200 hover:border-blue-600 focus:ring-blue-400'}`} title="Aggiungi rigo misura"><Plus className="w-4 h-4" /></button>
-                        <button onClick={(e) => { e.stopPropagation(); onAddSubtotal(article.id); }} className="w-6 h-6 rounded-full flex items-center justify-center text-orange-400 hover:text-white hover:bg-orange-500 transition-all border border-orange-200 hover:border-orange-500 shadow-sm" title="Inserisci Sommano Parziale"><Sigma className="w-3.5 h-3.5" /></button>
-                        
-                        <div className="group/help relative ml-2">
-                             <HelpCircle className="w-3.5 h-3.5 text-orange-300 cursor-help hover:text-orange-500" />
-                             <div className="absolute bottom-full left-0 mb-4 w-72 bg-slate-900 text-white p-5 rounded-3xl shadow-2xl opacity-0 group-hover/help:opacity-100 pointer-events-none transition-all z-[9999] border border-white/10 ring-1 ring-black">
-                                <h4 className="font-black uppercase text-[10px] tracking-widest text-orange-400 mb-3 flex items-center gap-2"><Layers className="w-4 h-4" /> Comandi di Rigo</h4>
-                                <div className="space-y-3">
-                                    <p className="text-[10px] leading-relaxed"><span className="text-white font-black">(+) AGGIUNGI:</span> Inserisce un nuovo rigo misura vuoto alla fine dell'elenco.</p>
-                                    <p className="text-[10px] leading-relaxed"><span className="text-white font-black">(Σ) PARZIALE:</span> Inserisce un divisore logico che somma tutti i righi precedenti fino al parziale precedente o all'inizio.</p>
-                                    <p className="text-[10px] border-t border-white/5 pt-2 italic text-slate-400">Patto d'Acciaio: Ogni nuova voce nasce espansa per facilitare l'inserimento immediato dei dati.</p>
-                                </div>
-                             </div>
-                        </div>
-                   </div>
-                )}
-                <span className={`uppercase text-[10px] ml-auto font-black italic tracking-widest ${isIndustrialMode ? 'text-indigo-600' : 'text-gray-400'}`}>Sommano {isPrintMode ? article.unit : <input readOnly value={article.unit} className="w-8 bg-transparent border-b border-dotted border-gray-400 text-center outline-none inline-block disabled:cursor-not-allowed cursor-not-allowed font-black" disabled={true} />}</span>
-             </td>
-             <td className={`border-r border-gray-200 ${isIndustrialMode ? 'border-slate-200' : ''}`}></td><td className={`border-r border-gray-200 ${isIndustrialMode ? 'border-slate-200' : ''}`}></td><td className={`border-r border-gray-200 ${isIndustrialMode ? 'border-slate-200' : ''}`}></td><td className={`border-r border-gray-200 ${isIndustrialMode ? 'border-slate-200' : ''}`}></td>
-             <td className={`text-right pr-1 font-mono border-r border-gray-200 font-black ${isIndustrialMode ? 'bg-slate-100/50 border-slate-200' : 'bg-gray-50'}`}>{formatResult(article.quantity)}</td>
-             <td className={`border-r border-gray-200 text-right pr-1 font-mono ${isIndustrialMode ? 'border-slate-200' : ''}`}>{isPrintMode ? formatResult(article.unitPrice) : <input readOnly type="number" value={article.unitPrice} className="w-full text-right bg-transparent border-none focus:ring-0 disabled:cursor-not-allowed cursor-not-allowed font-black" disabled={true} />}</td>
-             <td className={`border-r border-gray-200 text-right pr-1 font-mono font-black ${isIndustrialMode ? 'text-indigo-700 border-slate-200' : (isSafetyCategory ? 'text-orange-900' : 'text-blue-900')}`} style={{ fontSize: `13.5px` }}>{formatResult(totalAmount)}</td>
-             <td className={`border-r border-gray-200 text-right pr-1 font-mono text-gray-500 font-normal ${isIndustrialMode ? 'border-slate-200' : ''}`}>
-                 <div className="flex flex-col items-end leading-none py-1"><span>{formatCurrency(laborValue)}</span><span className="text-[9px] text-gray-400">({article.laborRate}%)</span></div>
-             </td>
-         </tr>
-
-         {isArticleDragOver && articleDropPosition === 'bottom' && (
-             <tr className="h-0 p-0 border-none"><td colSpan={11} className="p-0 border-none h-0 relative"><div className={`absolute w-full h-1 top-0 z-50 shadow-[0_0_15px_rgba(59,130,246,0.8)] pointer-events-none animate-pulse ${isSafetyCategory ? 'bg-orange-500 shadow-orange-500/80' : 'bg-blue-500 shadow-blue-500/80'}`}></div></td></tr>
-         )}
-      </tbody>
-   );
-};
-
-type ViewMode = 'COMPUTO' | 'SICUREZZA' | 'ANALISI' | 'SUMMARY' | 'CRONOPROGRAMMA'; 
-interface Snapshot { articles: Article[]; categories: Category[]; analyses: PriceAnalysis[]; }
-
-const App: React.FC = () => {
-  const [user, setUser] = useState<FirebaseUser | 'visitor' | null>(null);
-  const [authLoading, setAuthLoading] = useState(true);
-  const [isWorkspaceDragOver, setIsWorkspaceDragOver] = useState(false);
-  const [isManualOpen, setIsManualOpen] = useState(false);
-  const [isPrintMenuOpen, setIsPrintMenuOpen] = useState(false);
-  const [isSaveMenuOpen, setIsSaveMenuOpen] = useState(false);
-  const [isFocusMode, setIsFocusMode] = useState(false); 
-  const [toolbarPos, setToolbarPos] = useState({ x: 0, y: 50 }); 
-  const [isDraggingToolbar, setIsDraggingToolbar] = useState(false);
-  const [returnPath, setReturnPath] = useState<string | null>(null); 
-  const dragOffset = useRef({ x: 0, y: 0 });
-  const [isRebarModalOpen, setIsRebarModalOpen] = useState(false);
-  const [rebarTargetArticleId, setRebarTargetArticleId] = useState<string | null>(null);
-  const [isPaintingModalOpen, setIsPaintingModalOpen] = useState(false);
-  const [paintingTargetArticleId, setPaintingTargetArticleId] = useState<string | null>(null);
-  const [smartRepeatActiveId, setSmartRepeatActiveId] = useState<string | null>(null);
-  const [recordingArticleId, setRecordingArticleId] = useState<string | null>(null);
-  const [wbsDisplayMode, setWbsDisplayMode] = useState(0);
-  const [isSurveyorGuardActive, setIsSurveyorGuardActive] = useState(true); 
-  const [collapsedSuperCodes, setCollapsedSuperCodes] = useState<Set<string>>(new Set());
-  const [creatingForcedIsSuper, setCreatingForcedIsSuper] = useState<boolean | undefined>(undefined);
-  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [activeCategoryForAi, setActiveCategoryForAi] = useState<string | null>(null);
-  const [draggedAnalysisId, setDraggedAnalysisId] = useState<string | null>(null);
-  const [isDraggingAnalysis, setIsDraggingAnalysis] = useState(false);
-  const [analysisDragOverId, setAnalysisDragOverId] = useState<string | null>(null);
-  const [analysisDropPosition, setAnalysisDropPosition] = useState<'top' | 'bottom' | null>(null);
-  const [activeWbsContext, setActiveWbsContext] = useState<'work' | 'safety'>('work');
-  const [isOnline, setIsOnline] = useState(true);
-
-  const [lastMovedItemId, setLastMovedItemId] = useState<string | null>(null);
-
-  const [scheduleOffsets, setScheduleOffsets] = useState<Record<string, number>>({});
-  const [teamSizes, setTeamSizes] = useState<Record<string, number>>({});
-
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const scrollFrameRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!auth) { setAuthLoading(false); return; }
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => { 
-        setUser(firebaseUser as FirebaseUser);
-        setAuthLoading(false); 
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!db) return;
-    const connectedRef = ref(db, ".info/connected");
-    const unsubscribe = onValue(connectedRef, (snap) => {
-        setIsOnline(snap.val() === true);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    if (!user || user === 'visitor' || !db || !auth) return;
-    let idDispositivo = localStorage.getItem('unique_device_id');
-    if (!idDispositivo) {
-      idDispositivo = Math.random().toString(36).substring(2) + Date.now();
-      localStorage.setItem('unique_device_id', idDispositivo);
-    }
-    const userSessionRef = ref(db, `sessions/${user.uid}`);
-    let isMounted = true;
-    set(userSessionRef, { 
-      sessionId: idDispositivo, 
-      lastLogin: new Date().toISOString(), 
-      device: navigator.userAgent, 
-      platform: navigator.platform 
-    }).catch(err => console.error("Session Write Failed:", err));
-    const unsubscribeDb = onValue(userSessionRef, (snapshot) => {
-        if (!isMounted) return;
-        const data = snapshot.val();
-        if (data && data.sessionId && data.sessionId !== idDispositivo) {
-            alert("Questo account è stato effettuato da un altro computer. Questa sessione verrà chiusa.");
-            signOut(auth).then(() => {
-              window.location.reload();
-            }).catch(e => console.error("Logout error", e));
-        }
-    });
-    return () => { isMounted = false; off(userSessionRef); unsubscribeDb(); };
-  }, [user]);
-
-  useEffect(() => { setToolbarPos({ x: (window.innerWidth / 2) - 100, y: 30 }); }, []);
-
-  const handleVisitorLogin = () => { setUser('visitor'); };
-  const handleLogout = async () => { setAuthLoading(true); try { if (user !== 'visitor' && auth) { await signOut(auth); } } catch (err) { console.error("Logout error:", err); } finally { setUser(null); setAuthLoading(false); } };
-  const isVisitor = user === 'visitor';
-
-  const initializedCategories = useMemo(() => {
-      return CATEGORIES.map((c, i) => ({
-          ...c,
-          id: (c as any).id || `cat_init_${i}` 
-      }));
-  }, []);
-
-  const [viewMode, setViewMode] = useState<ViewMode>('COMPUTO');
-  const [categories, setCategories] = useState<Category[]>(initializedCategories);
-  const [articles, setArticles] = useState<Article[]>(INITIAL_ARTICLES);
-  const [analyses, setAnalyses] = useState<PriceAnalysis[]>(INITIAL_ANALYSES);
-  const [projectInfo, setProjectInfo] = useState<ProjectInfo>(PROJECT_INFO);
-  const [selectedCategoryCode, setSelectedCategoryCode] = useState<string>(categories[0]?.code || 'WBS.01');
-  const [activeColumn, setActiveColumn] = useState<string | null>(null);
-  const [history, setHistory] = useState<Snapshot[]>([]);
-  const [future, setFuture] = useState<Snapshot[]>([]);
-  const [currentFileHandle, setCurrentFileHandle] = useState<any>(null); 
-  const [isAutoSaving, setIsAutoSaving] = useState(false);
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [isAnalystModalOpen, setIsAnalystModalOpen] = useState(false);
-  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
-  const [editingCategory, setEditingCategory] = useState<Category | null>(null);
-  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
-  const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
-  const [linkTarget, setLinkTarget] = useState<{articleId: string, measurementId: string} | null>(null);
-  const [isEditArticleModalOpen, setIsEditArticleModalOpen] = useState(false);
-  const [editingArticle, setEditingArticle] = useState<Article | null>(null);
-  const [isProcessingDrop, setIsProcessingDrop] = useState(false);
-  const [lastAddedMeasurementId, setLastAddedMeasurementId] = useState<string | null>(null);
-
-  const handleViewChange = (view: 'lavori' | 'sicurezza' | 'summary' | 'schedule') => {
-    if (view === 'lavori') setViewMode('COMPUTO');
-    if (view === 'sicurezza') setViewMode('SICUREZZA');
-    if (view === 'summary') setViewMode('SUMMARY');
-    if (view === 'schedule') setViewMode('CRONOPROGRAMMA');
-
-    if ((view === 'lavori' || view === 'sicurezza') && view !== (viewMode === 'COMPUTO' ? 'lavori' : 'sicurezza')) {
-        const firstCategoryInView = categories.find(c => 
-            view === 'lavori' ? !c.code.startsWith('S.') : c.code.startsWith('S.')
-        );
-        setSelectedCategoryCode(firstCategoryInView ? firstCategoryInView.code : '');
-        playUISound('cycle');
-    }
-  };
-  const [draggedCategoryCode, setDraggedCategoryCode] = useState<string | null>(null);
-  const [activeSoaCategory, setActiveSoaCategory] = useState<string>('OG1');
-  const [wbsDropTarget, setWbsDropTarget] = useState<{ code: string, position: 'top' | 'bottom' | 'inside' } | null>(null);
-  const [isDraggingArticle, setIsDraggingArticle] = useState(false);
-  const [isAnalysisEditorOpen, setIsAnalysisEditorOpen] = useState(false);
-  const [editingAnalysis, setEditingAnalysis] = useState<PriceAnalysis | null>(null);
-  const [isImportAnalysisModalOpen, setIsImportAnalysisModalOpen] = useState(false);
-  const [wbsOptionsContext, setWbsOptionsContext] = useState<{ type: 'import' | 'clone', sourceCode?: string, payload?: any, initialName?: string, targetCode?: string, position?: 'top' | 'bottom', isSuper?: boolean, proposedColors?: string[] } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const startScroll = useCallback((speed: number) => {
-    if (scrollFrameRef.current) return;
-    const scroll = () => {
-        if (sidebarRef.current) {
-            sidebarRef.current.scrollTop += speed;
-            scrollFrameRef.current = requestAnimationFrame(scroll);
-        }
+export default function App() {
+  const [selectedTool, setSelectedTool] = useState<string | null>(() => localStorage.getItem('selectedTool') || 'Select');
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [layers, setLayers] = useState<Layer[]>(() => {
+    const saved = localStorage.getItem('layers');
+    return saved ? JSON.parse(saved) : [
+      { id: "0", name: "0", visible: true, frozen: false },
+      { id: "p1", name: "p1", visible: true, frozen: false },
+      { id: "p2", name: "p2", visible: true, frozen: false },
+      { id: "p4", name: "p4", visible: true, frozen: false },
+      { id: "Maschere", name: "Maschere", visible: true, frozen: false },
+      { id: "Misure", name: "Misure", visible: true, frozen: false },
+      { id: "Spessori", name: "Spessori", visible: true, frozen: false },
+      { id: "Hatch", name: "Hatch", visible: true, frozen: false },
+    ];
+  });
+  const [activeLayerId, setActiveLayerId] = useState<string>(() => localStorage.getItem('activeLayerId') || "0");
+  const [defaultLineStyle, setDefaultLineStyle] = useState(() => {
+    const saved = localStorage.getItem('defaultLineStyle');
+    return saved ? JSON.parse(saved) : {
+      color: "#444444",
+      lineWidth: 2,
+      dashed: false,
+      mode: "HB" as "2H" | "HB" | "CAD",
     };
-    scrollFrameRef.current = requestAnimationFrame(scroll);
-  }, []);
+  });
+  const [defaultHatchStyle, setDefaultHatchStyle] = useState(() => {
+    const saved = localStorage.getItem('defaultHatchStyle');
+    return saved ? JSON.parse(saved) : {
+      pattern: 'ANSI31',
+      scale: 30,
+      angle: 0,
+      color: '#000000',
+      sfumatura: 0,
+    };
+  });
+  const [defaultTextStyle, setDefaultTextStyle] = useState(() => {
+    const saved = localStorage.getItem('defaultTextStyle');
+    return saved ? JSON.parse(saved) : {
+      fontFamily: 'sans-serif',
+      fontSize: 14,
+      fontWeight: 'normal',
+      textAlign: 'left' as 'left' | 'center' | 'right' | 'justify',
+    };
+  });
+  const [eraserRadius, setEraserRadius] = useState(() => Number(localStorage.getItem('eraserRadius')) || 4);
+  const [eraserType, setEraserType] = useState<'pencil' | 'all'>(() => (localStorage.getItem('eraserType') as 'pencil' | 'all') || 'pencil');
+  const [favoritePanels, setFavoritePanels] = useState<Array<{ id: string; tools: string[]; x: number; y: number; isDocked: 'left' | 'right' | null }>>(() => {
+    const saved = localStorage.getItem('favoritePanels');
+    return saved ? JSON.parse(saved) : [
+      { id: "fav-1", tools: ["Line", "Circle", "Hatch", "Eraser"], x: 180, y: 120, isDocked: null }
+    ];
+  });
+  const [activeDraggingId, setActiveDraggingId] = useState<string | null>(null);
+  const favoritesDragRef = useRef<{ isDragging: boolean; panelId: string; startX: number; startY: number; posX: number; posY: number } | null>(null);
+  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [isDimensionDialogOpen, setIsDimensionDialogOpen] = useState(false);
+  const [isRaccordoDialogOpen, setIsRaccordoDialogOpen] = useState(false);
+  const [isDXFTextReaderOpen, setIsDXFTextReaderOpen] = useState(false);
+  const [selectedBIMSymbolType, setSelectedBIMSymbolType] = useState<string | null>(null);
 
-  const stopScroll = useCallback(() => {
-    if (scrollFrameRef.current) {
-        cancelAnimationFrame(scrollFrameRef.current);
-        scrollFrameRef.current = null;
-    }
-  }, []);
+  // BIM dedicated dialog states
+  const [isBIMPorteOpen, setIsBIMPorteOpen] = useState(false);
+  const [isBIMFinestreOpen, setIsBIMFinestreOpen] = useState(false);
+  const [isBIMArrediOpen, setIsBIMArrediOpen] = useState(false);
+  const [isBIMSanitariOpen, setIsBIMSanitariOpen] = useState(false);
+  const [isBIMElettricoOpen, setIsBIMElettricoOpen] = useState(false);
+  const [isBIMIdraulicoOpen, setIsBIMIdraulicoOpen] = useState(false);
+  const [isBIMFinitureOpen, setIsBIMFinitureOpen] = useState(false);
 
-  const canAddArticle = useCallback((newCountToAdd: number = 1): boolean => {
-    if (!isVisitor) return true;
-    const currentTotal = articles.length;
-    if (currentTotal + newCountToAdd > 15) {
-      alert(`LITE: Limite 15 voci raggiunto.`);
-      return false;
-    }
-    return true;
-  }, [isVisitor, articles.length]);
-
-  useEffect(() => { document.title = projectInfo.title ? `${projectInfo.title} - GeCoLa Cloud` : 'GeCoLa - Computo Metrico'; }, [projectInfo.title]);
-
-  const updateState = (newArticles: Article[], newCategories: Category[] = categories, newAnalyses: PriceAnalysis[] = analyses, saveHistory: boolean = true) => {
-      const recomputed = recalculateAllArticles(newArticles);
-      if (saveHistory) {
-          setHistory(prev => { const newHist = [...prev, { articles, categories, analyses }]; return newHist.length > 50 ? newHist.slice(newHist.length - 50) : newHist; });
-          setFuture([]); 
-      }
-      setArticles(recomputed);
-      setCategories(newCategories);
-      setAnalyses(newAnalyses);
-  };
-
-  const handleUndo = useCallback(() => {
-    if (history.length === 0) return;
-    const previous = history[history.length - 1];
-    setFuture(prev => [{ articles, categories, analyses }, ...prev]);
-    setHistory(history.slice(0, -1));
-    setArticles(previous.articles);
-    setCategories(previous.categories);
-    setAnalyses(previous.analyses);
-  }, [history, articles, categories, analyses]);
-
-  const handleRedo = useCallback(() => {
-    if (future.length === 0) return;
-    const next = future[0];
-    setHistory(prev => [...prev, { articles, categories, analyses }]);
-    setFuture(future.slice(1));
-    setArticles(next.articles);
-    setCategories(next.categories);
-    setAnalyses(next.analyses);
-  }, [future, articles, categories, analyses]);
-
-  const categoryTotals = useMemo(() => {
-    const lookup: Record<string, number> = {};
-    categories.forEach(cat => {
-      const catTotal = articles.filter(a => a.categoryCode === cat.code).reduce((sum, a) => sum + (a.quantity * a.unitPrice), 0);
-      lookup[cat.code] = catTotal;
-    });
-    return lookup;
-  }, [articles, categories]);
-
-  // CALCOLO NUMERAZIONE GLOBALE PROGRESSIVA
-  const globalArticleIndexMap = useMemo(() => {
-      const map = new Map<string, number>();
-      let counter = 1;
-      const filteredCategoriesForView = activeWbsContext === 'safety' ? categories.filter(c => c.type === 'safety') : categories.filter(c => c.type !== 'safety');
-      
-      filteredCategoriesForView.forEach(cat => {
-          if (cat.isEnabled === false || cat.isSuperCategory) return;
-          const catArticles = articles.filter(a => a.categoryCode === cat.code);
-          catArticles.forEach(art => {
-              map.set(art.id, counter++);
-          });
-      });
-      return map;
-  }, [articles, categories, activeWbsContext]);
-
-  const totals: Totals = useMemo(() => {
-    const totalWorks = articles.reduce((acc, art) => {
-        const cat = categories.find(c => c.code === art.categoryCode);
-        if (cat && (cat.isEnabled === false || cat.type === 'safety')) return acc;
-        return acc + (art.quantity * art.unitPrice);
-    }, 0);
-    const totalLabor = articles.reduce((acc, art) => {
-        const cat = categories.find(c => c.code === art.categoryCode);
-        if (cat && cat.isEnabled === false) return acc;
-        return acc + ((art.quantity * art.unitPrice) * (art.laborRate / 100));
-    }, 0);
-    const totalSafetyProgettuale = articles.reduce((acc, art) => {
-        const cat = categories.find(c => c.code === art.categoryCode);
-        if (cat && (cat.isEnabled === false || cat.type !== 'safety')) return acc;
-        return acc + (art.quantity * art.unitPrice);
-    }, 0);
-    const safetyCosts = totalWorks * (projectInfo.safetyRate / 100);
-    const totalTaxable = totalWorks + safetyCosts + totalSafetyProgettuale;
-    const vatAmount = totalTaxable * (projectInfo.vatRate / 100);
-    const grandTotal = totalTaxable + vatAmount;
-    return { totalWorks, totalLabor, safetyCosts, totalSafetyProgettuale, totalTaxable, vatAmount, grandTotal };
-  }, [articles, categories, projectInfo.safetyRate, projectInfo.vatRate]);
-
-  const totalForView = viewMode === 'COMPUTO' ? totals.totalWorks :
-                       viewMode === 'SICUREZZA' ? totals.totalSafetyProgettuale :
-                       totals.grandTotal;
-
-  const generateNextWbsCode = (currentCats: Category[]) => {
-      if (viewMode === 'SICUREZZA') {
-          return `S.${(currentCats.filter(c => c.type === 'safety' && !c.isSuperCategory).length + 1).toString().padStart(2, '0')}`;
-      }
-      return `WBS.${(currentCats.filter(c => c.type !== 'safety' && !c.isSuperCategory).length + 1).toString().padStart(2, '0')}`;
-  };
+  // BIM top bar reactive parameters
+  const [bimWallThickness, setBimWallThickness] = useState<number>(() => parseFloat(localStorage.getItem('lastWallThickness') || '15'));
+  const [bimWallHeight, setBimWallHeight] = useState<number>(() => parseFloat(localStorage.getItem('lastWallHeight') || '270'));
+  const [bimWallType, setBimWallType] = useState<string>(() => localStorage.getItem('lastWallType') || "Forati (Laterizio)");
   
-  const renumberCategories = useCallback((cats: Category[], currentArts: Article[]) => {
-      const codeMap: Record<string, string> = {};
-      let workCount = 0;
-      let safetyCount = 0;
-      let superCount = 0;
-      const newCategories = cats.map((cat) => {
-          let newCode = cat.code;
-          if (cat.isSuperCategory) {
-              superCount++;
-              newCode = `AREA.${superCount.toString().padStart(2, '0')}`;
-          } else if (cat.type === 'safety') {
-              safetyCount++;
-              newCode = `S.${safetyCount.toString().padStart(2, '0')}`;
-          } else {
-              workCount++;
-              newCode = `WBS.${workCount.toString().padStart(2, '0')}`;
-          }
-          codeMap[cat.code] = newCode;
-          return { ...cat, code: newCode };
-      });
-      const finalCategories = newCategories.map(cat => ({
-          ...cat,
-          parentId: cat.parentId && codeMap[cat.parentId] ? codeMap[cat.parentId] : cat.parentId
-      }));
-      const newArticles = currentArts.map(art => {
-          if (codeMap[art.categoryCode]) return { ...art, categoryCode: codeMap[art.categoryCode] };
-          return art;
-      });
-      return { newCategories: finalCategories, newArticles, codeMap };
-  }, []);
+const MASONRY_TYPES = [
+  "Forati (Laterizio)", "Mattoni Pieni", "Blocchi di Cemento", "Calcestruzzo Cellulare",
+  "Gasbeton", "Cartongesso", "Pietra Locale", "Blocchi Argilla Espansa",
+  "Forati Alveolati", "Blocchi Insonorizzati", "Blocchi Sismici", "Pannelli Sandwich",
+  "Blocchi Termici", "Blocchi Portanti", "Blocchi Faccia a Vista", "Blocchi Isolanti Grafite",
+  "Blocchi Isolanti Sughero", "Blocchi Isolanti Lana Roccia", "Blocchi Isolanti Perlite", "Laterizio Porizzato"
+];
+  const [bimDoorWidth, setBimDoorWidth] = useState<number>(() => parseFloat(localStorage.getItem('lastDoorWidth') || '80'));
+  const [bimDoorHeight, setBimDoorHeight] = useState<number>(() => parseFloat(localStorage.getItem('lastDoorHeight') || '210'));
+  const [bimWindowWidth, setBimWindowWidth] = useState<number>(() => parseFloat(localStorage.getItem('lastWindowWidth') || '120'));
+  const [bimWindowHeight, setBimWindowHeight] = useState<number>(() => parseFloat(localStorage.getItem('lastWindowHeight') || '140'));
+  const [bimSymbolScale, setBimSymbolScale] = useState<number>(() => parseFloat(localStorage.getItem('lastBIMSymbolScale') || '1'));
 
-  const renumberAnalyses = (analysesToRenumber: PriceAnalysis[], currentArticles: Article[]) => {
-    const newAnalyses = analysesToRenumber.map((an, idx) => {
-      const newCode = `AP.${(idx + 1).toString().padStart(2, '0')}`;
-      return { ...an, code: newCode };
-    });
-    const analysisLookup = new Map(newAnalyses.map(a => [a.id, a]));
-    const newArticles = currentArticles.map(art => {
-      if (art.linkedAnalysisId && analysisLookup.has(art.linkedAnalysisId)) {
-        const matchingAn = analysisLookup.get(art.linkedAnalysisId)!;
-        const laborRate = matchingAn.totalBatchValue > 0 ? parseFloat(((matchingAn.totalLabor / matchingAn.totalBatchValue) * 100).toFixed(2)) : 0;
-        return { 
-          ...art, 
-          code: matchingAn.code, 
-          description: matchingAn.description,
-          unit: matchingAn.unit,
-          unitPrice: roundTwoDecimals(matchingAn.totalUnitPrice),
-          laborRate: laborRate,
-          priceListSource: `Da Analisi ${matchingAn.code}` 
-        };
-      }
-      return art;
-    });
-    return { newAnalyses, newArticles };
-  };
+  const [editingRaccordo, setEditingRaccordo] = useState<Entity | null>(null);
+  const [raccordoConfig, setRaccordoConfig] = useState<{ type: 'curvo' | 'rettilineo' | 'taglia'; value: number }>({
+    type: 'curvo',
+    value: 10,
+  });
+  /* const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    isOpen: boolean;
+  } | null>(null); */
+  const [shortcutToast, setShortcutToast] = useState<string | null>(null);
+  const [tavole, setTavole] = useState<Tavola[]>([
+    { id: "tav1", name: "Tavola n. 1", format: "A4", scale: 100, unit: "cm", position: { x: -30, y: -20 }, visible: true, datiCartiglio: { progetto: "GECOLA CAD", titolo: "Tavola n. 1", autore: "Ing. Domenico Gimondo", data: "2026" } },
+    { id: "tav2", name: "Tavola n. 2", format: "A3", scale: 100, unit: "cm", position: { x: 30, y: -20 }, visible: false, datiCartiglio: { progetto: "GECOLA CAD", titolo: "Tavola n. 2", autore: "Ing. Domenico Gimondo", data: "2026" } },
+    { id: "tav3", name: "Tavola n. 3", format: "A2", scale: 200, unit: "cm", position: { x: -40, y: 30 }, visible: false, datiCartiglio: { progetto: "GECOLA CAD", titolo: "Tavola n. 3", autore: "Ing. Domenico Gimondo", data: "2026" } },
+    { id: "tav4", name: "Tavola n. 4", format: "A1", scale: 500, unit: "cm", position: { x: 40, y: 30 }, visible: false, datiCartiglio: { progetto: "GECOLA CAD", titolo: "Tavola n. 4", autore: "Ing. Domenico Gimondo", data: "2026" } },
+    { id: "tav5", name: "Tavola n. 5", format: "A0", scale: 1000, unit: "cm", position: { x: 0, y: 0 }, visible: false, datiCartiglio: { progetto: "GECOLA CAD", titolo: "Tavola n. 5", autore: "Ing. Domenico Gimondo", data: "2026" } },
+  ]);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<'penne' | 'tavole' | 'layers' | 'maschere' | 'testo' | 'gemini' | 'manuale' | 'bim'>(() => (localStorage.getItem('activeSidebarTab') as any) || 'penne');
+  const [isBIMAreaDialogOpen, setIsBIMAreaDialogOpen] = useState(false);
+  const [isBIMModeEnabled, setIsBIMModeEnabled] = useState(true);
+  const [is3DViewOpen, setIs3DViewOpen] = useState(false);
+  const [detectedAreaPoints, setDetectedAreaPoints] = useState<Point[] | { points: Point[], holes?: Point[][] } | null>(null);
+  const [editingAreaId, setEditingAreaId] = useState<string | null>(null);
+  const [hoveredGuide, setHoveredGuide] = useState<GuideItem | null>(null);
+  const [guideLockedBy, setGuideLockedBy] = useState<string | null>(null);
+  const [showFloatingManual, setShowFloatingManual] = useState(false);
+  const [geminiPrompt, setGeminiPrompt] = useState("");
+  const [geminiResponse, setGeminiResponse] = useState<{
+    explanation: string;
+    parameters: { name: string; value: number; label: string }[];
+    script: string;
+  } | null>(null);
+  const [geminiDslScript, setGeminiDslScript] = useState("");
+  const [geminiParams, setGeminiParams] = useState<Record<string, number>>({});
+  const [geminiIsLoading, setGeminiIsLoading] = useState(false);
+  const [geminiInsertX, setGeminiInsertX] = useState(0);
+  const [geminiInsertY, setGeminiInsertY] = useState(0);
+  
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
+  const [editingCartiglioTavolaId, setEditingCartiglioTavolaId] = useState<string | null>(null);
+  const [doubleClickedTavolaId, setDoubleClickedTavolaId] = useState<string | null>(null);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null);
+  const [activePreviewTavolaId, setActivePreviewTavolaId] = useState<string | null>(null);
+  const [rulerStyle, setRulerStyle] = useState<"tecnigrafo" | "crosshair">(() => (localStorage.getItem('rulerStyle') as any) || "crosshair");
+  const [orthoMode, setOrthoMode] = useState(() => localStorage.getItem('orthoMode') === 'true');
+  const [isTecnigrafoActive, setIsTecnigrafoActive] = useState(false);
+  const [isContinuousMode, setIsContinuousMode] = useState(false);
+  const [cancelTrigger, setCancelTrigger] = useState(0);
+  const [parallelTrigger, setParallelTrigger] = useState(0);
+  const [showProperties, setShowProperties] = useState(() => localStorage.getItem('showProperties') === 'true');
+  const [selectedCategory, setSelectedCategory] = useState(() => localStorage.getItem('selectedCategory') || "Disegno");
 
-  const handleSaveAnalysis = (updatedAnalysis: PriceAnalysis) => {
-      const roundedAnalysis = { ...updatedAnalysis, totalUnitPrice: roundTwoDecimals(updatedAnalysis.totalUnitPrice), totalBatchValue: roundTwoDecimals(updatedAnalysis.totalBatchValue) };
-      let newAnalyses = [...analyses];
-      const index = newAnalyses.findIndex(a => a.id === roundedAnalysis.id);
-      if (index !== -1) newAnalyses[index] = roundedAnalysis; else newAnalyses.push(roundedAnalysis);
-      const { newAnalyses: renumberedAn, newArticles } = renumberAnalyses(newAnalyses, articles);
-      updateState(newArticles, categories, renumberedAn);
-  };
+  // File System State
+  const [fileHandle, setFileHandle] = useState<any>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showDwgModal, setShowDwgModal] = useState(false);
+  const [dwgFileName, setDwgFileName] = useState("");
+  const importInputRef = useRef<HTMLInputElement>(null);
 
-  const handleDeleteAnalysis = (id: string) => {
-      if (window.confirm("Eliminare definitivamente questa analisi?")) {
-          const filteredAn = analyses.filter(a => a.id !== id);
-          const { newAnalyses: renumberedAn, newArticles } = renumberAnalyses(filteredAn, articles);
-          updateState(newArticles, categories, renumberedAn);
-      }
-  };
-
-  const handleImportAnalysisToArticle = (analysis: PriceAnalysis, targetWbsOverride?: string) => {
-      if (!canAddArticle()) return;
-      const targetCode = targetWbsOverride || activeCategoryForAi || (selectedCategoryCode === 'SUMMARY' ? categories[0].code : selectedCategoryCode);
-      const laborRate = analysis.totalBatchValue > 0 ? parseFloat(((analysis.totalLabor / analysis.totalBatchValue) * 100).toFixed(2)) : 0;
-      const newArticle: Article = {
-          id: Math.random().toString(36).substr(2, 9), categoryCode: targetCode, code: analysis.code, description: analysis.description, unit: analysis.unit, unitPrice: roundTwoDecimals(analysis.totalUnitPrice), laborRate: laborRate, linkedAnalysisId: analysis.id, priceListSource: `Da Analisi ${analysis.code}`, soaCategory: activeSoaCategory, measurements: [{ id: Math.random().toString(36).substr(2,9), description: '', type: 'positive', multiplier: undefined }], quantity: 0, displayMode: wbsDisplayMode
+  const saveToHandle = async (handle: any) => {
+    setIsSaving(true);
+    try {
+      const writable = await handle.createWritable();
+      const stateToSave = {
+        entities,
+        layers,
+        tavole,
+        measurements,
+        defaultLineStyle
       };
-      
-      const lastIdx = [...articles].reverse().findIndex(a => a.categoryCode === targetCode);
-      let updatedArticles;
-      if (lastIdx !== -1) {
-          const insertPos = articles.length - lastIdx;
-          updatedArticles = [...articles];
-          updatedArticles.splice(insertPos, 0, newArticle);
-      } else {
-          updatedArticles = [...articles, newArticle];
-      }
-      
-      updateState(updatedArticles, categories, analyses);
-      handleScrollToArticle(newArticle.id);
-      if (viewMode === 'ANALISI') setViewMode('COMPUTO');
-      setIsImportAnalysisModalOpen(false); 
-  };
-
-  const handleViewLinkedAnalysis = (analysisId: string) => {
-      const analysis = analyses.find(a => a.id === analysisId);
-      if (analysis) { setEditingAnalysis(analysis); setIsAnalysisEditorOpen(true); } else { alert("Analisi non trovata."); }
-  };
-
-  const handleConvertArticleToAnalysis = (article: Article) => {
-      const newId = Math.random().toString(36).substr(2, 9);
-      const newAnalysis: PriceAnalysis = {
-          id: newId,
-          code: `AP.${(analyses.length + 1).toString().padStart(2, '0')}`,
-          description: article.description,
-          unit: article.unit,
-          analysisQuantity: 1,
-          components: [],
-          generalExpensesRate: 15,
-          profitRate: 10,
-          totalMaterials: 0,
-          totalLabor: 0,
-          totalEquipment: 0,
-          costoTecnico: 0,
-          valoreSpese: 0,
-          valoreUtile: 0,
-          totalBatchValue: article.unitPrice,
-          totalUnitPrice: article.unitPrice,
-          isLocked: false
-      };
-      
-      const updatedArticles = articles.map(art => 
-          art.id === article.id ? { 
-              ...art, 
-              linkedAnalysisId: newId,
-              priceListSource: `Da Analisi ${newAnalysis.code}` 
-          } : art
-      );
-      
-      updateState(updatedArticles, categories, [...analyses, newAnalysis]);
-      setEditingAnalysis(newAnalysis);
-      setIsAnalysisEditorOpen(true);
-  };
-
-  const handleInsertExternalArticle = (insertIndex: number, rawText: string) => {
-      if (!canAddArticle()) return;
-      const targetCode = selectedCategoryCode === 'SUMMARY' ? categories[0].code : selectedCategoryCode;
-      const parsed = parseDroppedContent(rawText);
-      if (parsed) {
-          const newArticleId = Math.random().toString(36).substr(2, 9);
-          const newArticle: Article = {
-              id: newArticleId, categoryCode: targetCode, code: parsed.code || 'NP.001', priceListSource: parsed.priceListSource, description: parsed.description || 'Voce importata', unit: parsed.unit || 'cad', unitPrice: parsed.unitPrice || 0, laborRate: parsed.laborRate || 0, soaCategory: activeSoaCategory, measurements: [{ id: Math.random().toString(36).substr(2,9), description: '', type: 'positive', length: undefined, multiplier: undefined }], quantity: 0, displayMode: wbsDisplayMode
-          };
-          updateState([...articles, newArticle]);
-          handleScrollToArticle(newArticleId);
-          setLastMovedItemId(newArticleId);
-          setTimeout(() => setLastMovedItemId(null), 3000);
-      }
-  };
-
-  const handleWbsDragStart = (e: React.DragEvent, id: string) => { 
-      setDraggedCategoryCode(id); 
-      const dummyUrl = 'https://gecola.it/transfer/wbs/' + id;
-      e.dataTransfer.setData('text/uri-list', dummyUrl);
-      e.dataTransfer.setData('URL', dummyUrl);
-      const cat = categories.find(c => c.code === id);
-      if (cat) {
-          const catArticles = articles.filter(a => a.categoryCode === id);
-          const relatedAnalysesIds = new Set(catArticles.map(a => a.linkedAnalysisId).filter(Boolean));
-          const relatedAnalyses = analyses.filter(an => relatedAnalysesIds.has(an.id));
-          const payload = { type: 'CROSS_TAB_WBS_BUNDLE', category: cat, articles: catArticles, analyses: relatedAnalyses };
-          const jsonPayload = JSON.stringify(payload);
-          e.dataTransfer.setData('text/plain', jsonPayload);
-      }
-      e.dataTransfer.setData('wbsCode', id); 
-      e.dataTransfer.effectAllowed = 'all'; 
-  };
-
-  const handleWbsDragOver = (e: React.DragEvent, targetCode: string) => { 
-      e.preventDefault(); 
-      e.stopPropagation(); 
-      e.dataTransfer.dropEffect = 'copy'; 
-      const targetCat = categories.find(c => c.code === targetCode);
-      if (isDraggingArticle || isDraggingAnalysis) {
-          if (targetCat?.isSuperCategory) { e.dataTransfer.dropEffect = 'none'; setWbsDropTarget(null); return; }
-          setWbsDropTarget({ code: targetCode, position: 'inside' });
-          return;
-      }
-      if (draggedCategoryCode || e.dataTransfer.types.includes('text/plain')) {
-          if (draggedCategoryCode === targetCode) { setWbsDropTarget(null); return; }
-          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          if (targetCat?.isSuperCategory) {
-              if (e.clientY < (rect.top + 15)) { setWbsDropTarget({ code: targetCode, position: 'top' }); } else { setWbsDropTarget({ code: targetCode, position: 'inside' }); }
-          } else {
-             const midPoint = rect.top + rect.height / 2;
-             setWbsDropTarget({ code: targetCode, position: e.clientY < midPoint ? 'top' : 'bottom' });
-          }
-      }
-  };
-
-  const handleWbsDrop = (e: React.DragEvent, targetCode: string | null) => { 
-      e.preventDefault(); e.stopPropagation(); 
-      const pos = wbsDropTarget?.position || 'bottom';
-      setWbsDropTarget(null);
-      const analysisId = e.dataTransfer.getData(MIME_ANALYSIS_DRAG);
-      if (analysisId && targetCode) {
-          const targetCategory = categories.find(c => c.code === targetCode);
-          if (targetCategory?.isSuperCategory) { setIsDraggingAnalysis(false); return; }
-          const analysis = analyses.find(a => a.id === analysisId);
-          if (analysis) { handleImportAnalysisToArticle(analysis, targetCode); playUISound('confirm'); }
-          setIsDraggingAnalysis(false); setDraggedAnalysisId(null); return;
-      }
-      const textData = e.dataTransfer.getData('text/plain');
-      if (textData && !draggedCategoryCode) {
-          try {
-              const payload = JSON.parse(textData);
-              if (payload && payload.type === 'CROSS_TAB_WBS_BUNDLE') { setWbsOptionsContext({ type: 'import', payload, initialName: payload.category.name, targetCode: targetCode || undefined, position: pos as any }); return; }
-          } catch (err) {}
-      }
-      const droppedArticleId = e.dataTransfer.getData('articleId');
-      if (droppedArticleId && targetCode) {
-          const targetCategory = categories.find(c => c.code === targetCode);
-          if (targetCategory?.isSuperCategory) return;
-          if (targetCategory?.isLocked) { alert("WBS bloccata."); return; }
-          const article = articles.find(a => a.id === droppedArticleId);
-          if (!article) return;
-          if (article.categoryCode === targetCode) return;
-          let updatedArticles;
-          if (e.ctrlKey) {
-              const newId = Math.random().toString(36).substr(2, 9);
-              const newArticle: Article = { ...article, id: newId, categoryCode: targetCode, measurements: article.measurements.map(m => ({ ...m, id: Math.random().toString(36).substr(2, 9) })) };
-              updatedArticles = [...articles, newArticle];
-              setLastMovedItemId(newId);
-          } else {
-              updatedArticles = articles.map(a => a.id === droppedArticleId ? { ...a, categoryCode: targetCode } : a);
-              setLastMovedItemId(droppedArticleId);
-          }
-          updateState(updatedArticles);
-          setTimeout(() => setLastMovedItemId(null), 3000);
-          setDraggedCategoryCode(null); setIsDraggingArticle(false); return;
-      }
-      if (draggedCategoryCode) {
-          const originalCode = draggedCategoryCode;
-          if (!targetCode) {
-             const newCats = categories.map(c => c.code === draggedCategoryCode ? { ...c, parentId: undefined } : c);
-             updateState(articles, newCats); setLastMovedItemId(originalCode);
-             setTimeout(() => setLastMovedItemId(null), 3000);
-             setDraggedCategoryCode(null); playUISound('move'); return;
-          }
-          const targetIdx = categories.findIndex(c => c.code === targetCode);
-          const targetCat = categories[targetIdx];
-          let newCatsOrder = [...categories];
-          const sIdx = newCatsOrder.findIndex(c => c.code === draggedCategoryCode);
-          const [movedItem] = newCatsOrder.splice(sIdx, 1);
-          let finalTargetIdx: number;
-          let targetParentId: string | undefined = undefined;
-          if (pos === 'inside' && targetCat?.isSuperCategory) {
-              targetParentId = targetCode;
-              const lastChildIdx = [...newCatsOrder].reverse().findIndex(c => c.parentId === targetCode);
-              if (lastChildIdx !== -1) { finalTargetIdx = newCatsOrder.length - lastChildIdx; } else { finalTargetIdx = newCatsOrder.findIndex(c => c.code === targetCode) + 1; }
-          } else {
-              targetParentId = targetCat?.parentId;
-              finalTargetIdx = newCatsOrder.findIndex(c => c.code === targetCode);
-              if (pos === 'bottom') finalTargetIdx++;
-          }
-          const updatedMovedItem = { ...movedItem, parentId: targetParentId };
-          newCatsOrder.splice(Math.max(0, finalTargetIdx), 0, updatedMovedItem);
-          const result = renumberCategories(newCatsOrder, articles); 
-          const newCode = result.codeMap[originalCode];
-          updateState(result.newArticles, result.newCategories); 
-          setLastMovedItemId(newCode);
-          setTimeout(() => setLastMovedItemId(null), 3000);
-          setDraggedCategoryCode(null); playUISound('move');
-      }
-  };
-
-  const handleAnalysisRowDragStart = (e: React.DragEvent, id: string) => {
-    setDraggedAnalysisId(id);
-    setIsDraggingAnalysis(true);
-    e.dataTransfer.setData(MIME_ANALYSIS_ROW, id);
-    const analysis = analyses.find(a => a.id === id);
-    if (analysis) e.dataTransfer.setData(MIME_ANALYSIS_DRAG, analysis.id);
-    e.dataTransfer.effectAllowed = 'copyMove';
-  };
-
-  const handleAnalysisRowDragOver = (e: React.DragEvent, id: string) => {
-    e.preventDefault();
-    if (draggedAnalysisId === id) { setAnalysisDragOverId(null); return; }
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const midPoint = rect.top + rect.height / 2;
-    setAnalysisDropPosition(e.clientY < midPoint ? 'top' : 'bottom');
-    setAnalysisDragOverId(id);
-  };
-
-  const handleAnalysisRowDrop = (e: React.DragEvent, targetId: string) => {
-    e.preventDefault();
-    const sourceId = e.dataTransfer.getData(MIME_ANALYSIS_ROW) || draggedAnalysisId;
-    setAnalysisDragOverId(null);
-    setDraggedAnalysisId(null);
-    setIsDraggingAnalysis(false);
-    if (!sourceId || sourceId === targetId) return;
-    const sIdx = analyses.findIndex(a => a.id === sourceId);
-    let tIdx = analyses.findIndex(a => a.id === targetId);
-    if (sIdx === -1 || tIdx === -1) return;
-    const newAnalyses = [...analyses];
-    const [movedItem] = newAnalyses.splice(sIdx, 1);
-    if (sIdx < tIdx && analysisDropPosition === 'top') tIdx--;
-    if (sIdx > tIdx && analysisDropPosition === 'bottom') tIdx++;
-    newAnalyses.splice(Math.max(0, tIdx), 0, movedItem);
-    const { newAnalyses: renumberedAn, newArticles } = renumberAnalyses(newAnalyses, articles);
-    updateState(newArticles, categories, renumberedAn);
-    playUISound('move');
-    setLastMovedItemId(sourceId);
-    setTimeout(() => setLastMovedItemId(null), 2000);
-  };
-
-  const handleWbsActionChoice = (mode: WbsActionMode, newName: string) => {
-    if (!wbsOptionsContext) return;
-    const { type, sourceCode, payload } = wbsOptionsContext;
-    if ((type === 'clone' && sourceCode) || (type === 'import' && payload)) {
-      let sourceCat: Category | null = null;
-      let sourceArticles: Article[] = [];
-      let sourceAnalyses: PriceAnalysis[] = [];
-      if (type === 'import' && payload) { sourceCat = payload.category; sourceArticles = payload.articles; sourceAnalyses = payload.analyses || []; } else { sourceCat = categories.find(c => c.code === sourceCode) || null; if (sourceCat) { sourceArticles = articles.filter(a => a.categoryCode === sourceCode); const relatedAnalysesIds = new Set(sourceArticles.map(a => a.linkedAnalysisId).filter(Boolean)); sourceAnalyses = analyses.filter(an => relatedAnalysesIds.has(an.id)); } }
-      if (!sourceCat) { setWbsOptionsContext(null); return; }
-      const newCatId = `cat_${Date.now()}`;
-      const tempCode = `TEMP_${Date.now()}`;
-      const newCategory: Category = { ...sourceCat, id: newCatId, name: newName, code: tempCode, isLocked: false };
-      const analysisIdMap = new Map<string, string>();
-      const newAnalysesList = [...analyses];
-      sourceAnalyses.forEach(an => { const newId = Math.random().toString(36).substr(2, 9); analysisIdMap.set(an.id, newId); let newCode = an.code; if (analyses.some(existing => existing.code === newCode)) { newCode = `AP.${(newAnalysesList.length + 1).toString().padStart(2, '0')}`; } const clonedAnalysis: PriceAnalysis = { ...an, id: newId, code: newCode, components: an.components.map(c => ({ ...c, id: Math.random().toString(36).substr(2, 9) })) }; newAnalysesList.push(clonedAnalysis); });
-      const newArticlesRaw = sourceArticles.map(art => { const newArtId = Math.random().toString(36).substr(2, 9); let newLinkedAnalysisId = art.linkedAnalysisId; if (newLinkedAnalysisId && analysisIdMap.has(newLinkedAnalysisId)) { newLinkedAnalysisId = analysisIdMap.get(newLinkedAnalysisId)!; } let newMeasurements: Measurement[] = []; if (mode === 'full') { newMeasurements = art.measurements.map(m => ({ ...m, id: Math.random().toString(36).substr(2, 9), linkedArticleId: undefined })); } else if (mode === 'descriptions') { newMeasurements = art.measurements.map(m => ({ ...m, id: Math.random().toString(36).substr(2, 9), linkedArticleId: undefined, length: undefined, width: undefined, height: undefined, multiplier: undefined })); } else { newMeasurements = [{ id: Math.random().toString(36).substr(2, 9), description: '', type: 'positive' }]; } return { ...art, id: newArtId, categoryCode: tempCode, linkedAnalysisId: newLinkedAnalysisId, measurements: newMeasurements, displayMode: wbsDisplayMode } as Article; });
-      const newCatsList = [...categories];
-      const targetIdx = wbsOptionsContext.targetCode ? categories.findIndex(c => c.code === wbsOptionsContext.targetCode) : -1;
-      if (targetIdx !== -1) { const insertIdx = wbsOptionsContext.position === 'bottom' ? targetIdx + 1 : targetIdx; newCatsList.splice(insertIdx, 0, newCategory); } else { newCatsList.push(newCategory); }
-      const allArticlesList = [...articles, ...newArticlesRaw];
-      const result = renumberCategories(newCatsList, allArticlesList);
-      updateState(result.newArticles, result.newCategories, newAnalysesList);
-      const assignedCode = result.codeMap[tempCode];
-      setLastMovedItemId(assignedCode);
-      setTimeout(() => setLastMovedItemId(null), 3000);
-      playUISound('confirm');
+      await writable.write(JSON.stringify(stateToSave));
+      await writable.close();
+    } catch (err) {
+      console.error("Failed to save to file:", err);
+    } finally {
+      // Short delay so the green dot is visible
+      setTimeout(() => setIsSaving(false), 500); 
     }
-    setWbsOptionsContext(null);
   };
 
-  const handleUpdateArticle = (id: string, field: keyof Article, value: any) => { 
-    const finalValue = field === 'description' ? cleanDescription(value) : value;
-    const updated = articles.map(art => art.id === id ? { ...art, [field]: finalValue } : art); 
-    updateState(updated); 
-  };
-  
-  // PATTO DI FERRO: DISTACCO ANALISI SU MODIFICA EDIT
-  const handleArticleEditSave = (id: string, updates: Partial<Article>) => { 
-    const cleanedUpdates = { ...updates };
-    if (cleanedUpdates.description) cleanedUpdates.description = cleanDescription(cleanedUpdates.description);
-    if (cleanedUpdates.code) cleanedUpdates.code = cleanDescription(cleanedUpdates.code); // Anche il codice se necessario
+  useEffect(() => {
+    if (!fileHandle) return;
+    const timeoutId = setTimeout(() => {
+      saveToHandle(fileHandle);
+    }, 1000);
+    return () => clearTimeout(timeoutId);
+  }, [entities, fileHandle, layers, tavole, measurements]);
 
-    const updated = articles.map(art => {
-        if (id === art.id) {
-           const isActuallyModified = Object.keys(cleanedUpdates).some(k => (cleanedUpdates as any)[k] !== (art as any)[k]);
-           if (isActuallyModified && art.linkedAnalysisId) {
-              return { 
-                  ...art, 
-                  ...cleanedUpdates, 
-                  linkedAnalysisId: undefined, 
-                  priceListSource: 'Definito dal Progettista' 
-              };
-           }
-           return { ...art, ...cleanedUpdates };
-        }
-        return art;
-    }); 
-    updateState(updated); 
-  };
+  const bimVisibilityStateRef = useRef<Record<string, boolean>>({});
 
-  const handleEditArticleDetails = (article: Article) => { setEditingArticle(article); setIsEditArticleModalOpen(true); };
-  const handleDeleteArticle = (id: string) => { if (window.confirm("Eliminare la voce?")) { const updated = articles.filter(art => art.id !== id); updateState(updated); } };
-  const handleAddMeasurement = (articleId: string) => { 
-      const newId = Math.random().toString(36).substr(2, 9); setLastAddedMeasurementId(newId); 
-      setArticles(prevArticles => { const updated = prevArticles.map(art => { if (art.id !== articleId) return art; const lastM = art.measurements.length > 0 ? art.measurements[art.measurements.length - 1] : null; let newM: Measurement = { id: newId, description: '', type: 'positive', length: undefined, width: undefined, height: undefined, multiplier: undefined }; if (smartRepeatActiveId === articleId && lastM && lastM.type !== 'subtotal') { newM = { ...newM, description: lastM.description, multiplier: lastM.multiplier, length: lastM.length, width: lastM.width, height: lastM.height, type: lastM.type }; } return { ...art, measurements: [...art.measurements, newM] }; }); return recalculateAllArticles(updated); });
-  };
-  const handleUpdateMeasurement = (articleId: string, mId: string, field: keyof Measurement, value: string | number | undefined) => { 
-      const finalValue = field === 'description' && typeof value === 'string' ? cleanDescription(value) : value;
-      setArticles(prevArticles => { 
-          const updated = prevArticles.map(art => { 
-              if (art.id !== articleId) return art; 
-              const newMeasurements = art.measurements.map(m => { 
-                  if (m.id !== mId) return m; 
-                  return { ...m, [field]: finalValue }; 
-              }); 
-              return { ...art, measurements: newMeasurements }; 
-          }); 
-          if (field === 'description') return updated; // Skip recalculation for description changes to improve performance
-          return recalculateAllArticles(updated); 
-      });
-  };
-  const handleAddSubtotal = (articleId: string) => { const updated = articles.map(art => { if (art.id !== articleId) return art; const newM: Measurement = { id: Math.random().toString(36).substr(2, 9), description: '', type: 'subtotal' }; return { ...art, measurements: [...art.measurements, newM] }; }); updateState(updated); };
-  const handleDeleteMeasurement = (articleId: string, mId: string) => { const updated = articles.map(art => { if (art.id !== articleId) return art; const newMeasurements = art.measurements.filter(m => m.id !== mId); return { ...art, measurements: newMeasurements }; }); updateState(updated); };
-  const handleReorderMeasurements = (articleId: string, startIndex: number, endIndex: number) => { const updated = articles.map(art => { if (art.id !== articleId) return art; const newMeasurements = [...art.measurements]; const [movedItem] = newMeasurements.splice(startIndex, 1); newMeasurements.splice(endIndex, 0, movedItem); return { ...art, measurements: newMeasurements }; }); updateState(updated); };
-  const handleArticleDragStart = (e: React.DragEvent, article: Article) => { setIsDraggingArticle(true); e.dataTransfer.setData(MIME_ARTICLE, 'true'); e.dataTransfer.setData('type', 'ARTICLE'); e.dataTransfer.setData('articleId', article.id); e.dataTransfer.effectAllowed = 'all'; };
-  const onArticleDragEnd = () => { setIsDraggingArticle(false); setWbsDropTarget(null); };
-  const handleArticleDrop = (e: React.DragEvent, targetArticleId: string, position: 'top' | 'bottom' = 'bottom') => { setIsDraggingArticle(false); setWbsDropTarget(null); const articleId = e.dataTransfer.getData('articleId'); if (!articleId) return; const targetArticle = articles.find(a => a.id === articleId); if (!targetArticle) return; const currentCategoryArticles = articles.filter(a => a.categoryCode === targetArticle.categoryCode); const startIndex = currentCategoryArticles.findIndex(a => a.id === articleId); let targetIndex = currentCategoryArticles.findIndex(a => a.id === targetArticleId); if (startIndex === -1 || targetIndex === -1) return; if (position === 'bottom' && startIndex > targetIndex) targetIndex++; else if (position === 'top' && startIndex < targetIndex) targetIndex--; const otherArticles = articles.filter(a => a.categoryCode !== targetArticle.categoryCode); const newSubset = [...currentCategoryArticles]; const [movedItem] = newSubset.splice(startIndex, 1); newSubset.splice(targetIndex, 0, movedItem); const newGlobalArticles = [...otherArticles, ...newSubset]; updateState(newGlobalArticles); setLastMovedItemId(articleId); setTimeout(() => setLastMovedItemId(null), 3000); };
-  const handleOpenLinkModal = (articleId: string, measurementId: string) => { setLinkTarget({ articleId, measurementId }); setIsLinkModalOpen(true); };
-  const handleLinkMeasurement = (sourceArticle: Article, type: 'quantity' | 'amount') => { if (!linkTarget) return; const updated = articles.map(art => { if (art.id !== linkTarget.articleId) return art; const newMeasurements = art.measurements.map(m => { if (m.id !== linkTarget.measurementId) return m; return { ...m, linkedArticleId: sourceArticle.id, linkedType: type, length: undefined, width: undefined, height: undefined, description: '', multiplier: undefined, type: 'positive' as const }; }); return { ...art, measurements: newMeasurements }; }); updateState(updated); setIsLinkModalOpen(false); setLinkTarget(null); };
-  const handleScrollToArticle = (id: string, fromId?: string) => { const targetArt = articles.find(a => a.id === id); if (!targetArt) return; if (fromId) setReturnPath(fromId); if (selectedCategoryCode !== targetArt.categoryCode) setSelectedCategoryCode(targetArt.categoryCode); setTimeout(() => { const element = document.getElementById(`article-${id}`); if (element) { element.scrollIntoView({ behavior: 'smooth', block: 'start' }); element.classList.add('bg-yellow-50'); setTimeout(() => element.classList.remove('bg-yellow-50'), 2000); } }, 300); };
-  const handleReturnToArticle = () => { if (returnPath) { const id = returnPath; setReturnPath(null); handleScrollToArticle(id); } };
-  const handleAddEmptyArticle = (categoryCode: string) => { if (!canAddArticle()) return; const nextAnalysisCode = `AP.${(analyses.length + 1).toString().padStart(2, '0')}`; const newArticleId = Math.random().toString(36).substr(2, 9); const newArticle: Article = { id: newArticleId, categoryCode, code: nextAnalysisCode, description: cleanDescription('Nuova voce'), unit: 'cad', unitPrice: 0, laborRate: 0, linkedAnalysisId: undefined, priceListSource: `Da Analisi ${nextAnalysisCode}`, soaCategory: activeSoaCategory, measurements: [{ id: Math.random().toString(36).substr(2,9), description: '', type: 'positive', multiplier: undefined }], quantity: 0, displayMode: wbsDisplayMode }; updateState([...articles, newArticle]); handleScrollToArticle(newArticleId); setLastMovedItemId(newArticleId); setTimeout(() => setLastMovedItemId(null), 3000); };
-  const handleToggleArticleLock = (id: string) => { const updated = articles.map(art => art.id === id ? { ...art, isLocked: !art.isLocked } : art); updateState(updated); };
-  const handleOpenRebarCalculator = (articleId: string) => { setRebarTargetArticleId(articleId); setIsRebarModalOpen(true); };
-  const handleOpenPaintingCalculator = (articleId: string) => { setPaintingTargetArticleId(articleId); setIsPaintingModalOpen(true); };
-  const handleToggleSmartRepeat = (articleId: string) => { if (smartRepeatActiveId === articleId) setSmartRepeatActiveId(null); else setSmartRepeatActiveId(articleId); };
-  
-  // PATTO DI FERRO: RIPRISTINO FUNZIONE CUFFIE NELLE MISURE
-  const handleStartVoiceDictation = (articleId: string) => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-        alert("Riconoscimento vocale non supportato in questo browser.");
-        return;
-    }
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'it-IT';
-    recognition.continuous = false;
-    recognition.interimResults = false;
-
-    recognition.onstart = () => {
-        setRecordingArticleId(articleId);
-        playUISound('toggle');
-    };
-
-    recognition.onresult = async (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        if (transcript) {
-            try {
-                const parsed = await parseVoiceMeasurement(transcript);
-                const newId = Math.random().toString(36).substr(2, 9);
-                const newArticles = articles.map(art => {
-                    if (art.id !== articleId) return art;
-                    const newM: Measurement = { 
-                        id: newId, 
-                        description: parsed.description || transcript, 
-                        multiplier: parsed.multiplier,
-                        length: parsed.length,
-                        width: parsed.width,
-                        height: parsed.height,
-                        type: 'positive' 
-                    };
-                    return { ...art, measurements: [...art.measurements, newM] };
-                });
-                updateState(newArticles);
-                playUISound('newline');
-                // Creazione automatica nuovo rigo (andare avanti)
-                setTimeout(() => handleAddMeasurement(articleId), 400);
-            } catch (error) {
-                console.error("Errore parsing vocale:", error);
-                // Fallback a trascrizione semplice
-                const newId = Math.random().toString(36).substr(2, 9);
-                const newArticles = articles.map(art => {
-                    if (art.id !== articleId) return art;
-                    const newM: Measurement = { id: newId, description: transcript, type: 'positive' };
-                    return { ...art, measurements: [...art.measurements, newM] };
-                });
-                updateState(newArticles);
-            }
-        }
-    };
-
-    recognition.onend = () => {
-        setRecordingArticleId(null);
-    };
-
-    recognition.start();
-  };
-
-  const handleToggleItemDisplayMode = (articleId: string) => {
-    const article = articles.find(a => a.id === articleId);
-    if (!article) return;
-    const next = ((article.displayMode || 0) + 1) % 3;
-    handleUpdateArticle(articleId, 'displayMode', next);
-    playUISound('cycle');
-  };
-
-  const handleCycleDisplayMode = () => { 
-    const nextMode = (wbsDisplayMode + 1) % 3; 
-    setWbsDisplayMode(nextMode); 
-    playUISound('cycle'); 
-    const updated = articles.map(a => a.categoryCode === selectedCategoryCode ? { ...a, displayMode: nextMode } : a); 
-    updateState(updated); 
-  };
-  const handleToggleSurveyorGuard = () => { setIsSurveyorGuardActive(!isSurveyorGuardActive); playUISound('toggle'); };
-  const handleToggleAllCategories = () => { const anyEnabled = categories.some(c => c.isEnabled !== false); const newCats = categories.map(c => ({ ...c, isEnabled: !anyEnabled })); updateState(articles, newCats); playUISound('toggle'); };
-  const handleAddWbs = () => { setEditingCategory(null); setCreatingForcedIsSuper(false); setIsCategoryModalOpen(true); };
-  const handleAddSuperCategory = () => { setEditingCategory(null); setCreatingForcedIsSuper(true); setIsCategoryModalOpen(true); };
-  const handleEditCategory = (cat: Category) => { setEditingCategory(cat); setCreatingForcedIsSuper(undefined); setIsCategoryModalOpen(true); };
-  const handleDeleteCategory = (code: string) => { const cat = categories.find(c => c.code === code); if (cat?.isLocked) { alert("WBS bloccata."); return; } if (window.confirm(`Eliminare definitivamente la WBS ${code}?`)) { const isSuper = cat?.isSuperCategory; let newCats = categories.filter(c => c.code !== code); let newArts = articles.filter(a => a.categoryCode !== code); if (isSuper) { newCats = newCats.map(c => c.parentId === code ? { ...c, parentId: undefined } : c); } const result = renumberCategories(newCats, newArts); updateState(result.newArticles, result.newCategories); if (selectedCategoryCode === code) setSelectedCategoryCode(''); } };
-  const handleToggleCategoryLock = (code: string) => { const newCats = categories.map(c => c.code === code ? { ...c, isLocked: !c.isLocked } : c); updateState(articles, newCats); playUISound('toggle'); };
-  const handleToggleCategoryVisibility = (code: string) => { const newCats = categories.map(c => c.code === code ? { ...c, isEnabled: !c.isEnabled } : c); updateState(articles, newCats); playUISound('toggle'); };
-  const handleSaveCategory = (name: string, isSuper: boolean, color: string, soa?: string) => { if (editingCategory) { const newCats = categories.map(c => c.id === editingCategory.id ? { ...c, name, isSuperCategory: isSuper, color, soaCategory: soa } : c); updateState(articles, newCats); } else { const newCode = generateNextWbsCode(categories); const newCat: Category = { id: `cat_${Date.now()}`, code: newCode, name, isEnabled: true, isLocked: false, isSuperCategory: isSuper, type: viewMode === 'SICUREZZA' ? 'safety' : 'work', color: color, soaCategory: soa }; let newCatsList = isSuper ? [newCat, ...categories] : [...categories, newCat]; const result = renumberCategories(newCatsList, articles); updateState(result.newArticles, result.newCategories); setSelectedCategoryCode(newCat.code); const assignedCode = result.codeMap[newCat.code] || newCat.code; setLastMovedItemId(assignedCode); setTimeout(() => setLastMovedItemId(null), 3000); } setIsCategoryModalOpen(false); playUISound('confirm'); };
-  const handleResetProject = () => { window.open(window.location.href, '_blank'); playUISound('newline'); };
-  const handleAddRebarMeasurement = (measurements: Array<{ diameter: number; weight: number; multiplier: number; length: number; description: string }>) => { if (!rebarTargetArticleId) return; const updated = articles.map(art => { if (art.id !== rebarTargetArticleId) return art; const newMeasures: Measurement[] = measurements.map(m => ({ id: Math.random().toString(36).substr(2, 9), description: m.description, type: 'positive' as const, multiplier: m.multiplier, length: m.length, width: undefined, height: m.weight })); return { ...art, measurements: [...art.measurements, ...newMeasures] }; }); updateState(updated); setIsRebarModalOpen(false); };
-  const handleAddPaintingMeasurements = (paintRows: Array<{ description: string; multiplier: number; length?: number; width?: number; height?: number; type: 'positive' }>) => { if (paintingTargetArticleId) { const updated = articles.map(art => { if (art.id !== paintingTargetArticleId) return art; const newMeasures = paintRows.map(row => ({ ...row, id: Math.random().toString(36).substr(2, 9) })); return { ...art, measurements: [...art.measurements, ...newMeasures] }; }); updateState(updated); setIsPaintingModalOpen(false); } };
-  const handleDropContent = (rawText: string) => { if (!canAddArticle()) return; const targetCatCode = activeCategoryForAi || (selectedCategoryCode === 'SUMMARY' ? categories[0].code : selectedCategoryCode); const currentCat = categories.find(c => c.code === targetCatCode); if (currentCat && currentCat.isLocked) { alert("Capitolo bloccato."); return; } if (!rawText) return; setIsProcessingDrop(true); setTimeout(() => { try { const parsed = parseDroppedContent(rawText); if (parsed) { const newArtId = Math.random().toString(36).substr(2, 9); const newMeasId = Math.random().toString(36).substr(2, 9); const newArticle: Article = { id: newArtId, categoryCode: targetCatCode, code: parsed.code || 'NP.001', priceListSource: parsed.priceListSource, description: parsed.description || 'Voce importata', unit: parsed.unit || 'cad', unitPrice: parsed.unitPrice || 0, laborRate: parsed.laborRate || 0, soaCategory: activeSoaCategory, measurements: [{ id: newMeasId, description: '', type: 'positive', length: undefined, multiplier: undefined }], quantity: 0, displayMode: wbsDisplayMode }; updateState([...articles, ...[newArticle]]); handleScrollToArticle(newArtId); setLastMovedItemId(newArtId); setTimeout(() => setLastMovedItemId(null), 3000); } } catch (e) { console.error("Drop Parser Error", e); } finally { setIsProcessingDrop(false); } }, 100); };
-  const handleBulkGenerateLocal = async (description: string) => { if (!canAddArticle()) return; setIsGenerating(true); try { const generatedItems = await generateBulkItems(description, projectInfo.region, projectInfo.year, categories); if (generatedItems && generatedItems.length > 0) { const newArticles: Article[] = generatedItems.map(item => { const qty = item.quantity || 1; return { id: Math.random().toString(36).substr(2, 9), categoryCode: item.categoryCode || (categories[0]?.code || 'WBS.01'), code: item.code || 'NP.001', priceListSource: item.priceListSource || 'Generato da IA', description: item.description || 'Voce generata', unit: item.unit || 'cad', unitPrice: item.unitPrice || 0, laborRate: item.laborRate || 0, soaCategory: activeSoaCategory, measurements: [{ id: Math.random().toString(36).substr(2, 9), description: 'Voce generata da assistente', type: 'positive', length: qty, multiplier: 1 }], quantity: qty, displayMode: wbsDisplayMode, groundingUrls: (item as any).groundingUrls }; }); updateState([...articles, ...newArticles]); if (newArticles.length > 0) handleScrollToArticle(newArticles[0].id); setIsBulkModalOpen(false); } } catch (e) { console.error("Bulk Generation Error:", e); alert("Si è verificato un errore durante la generazione delle voci."); } finally { setIsGenerating(false); } };
-  const handleWorkspaceDrop = (e: React.DragEvent) => { 
-    e.preventDefault(); e.stopPropagation(); 
-    if (draggedCategoryCode) { setIsWorkspaceDragOver(false); return; }
-    setIsWorkspaceDragOver(false);
-    const analysisId = e.dataTransfer.getData(MIME_ANALYSIS_DRAG);
-    if (analysisId) {
-        const targetCode = selectedCategoryCode === 'SUMMARY' ? categories[0].code : selectedCategoryCode;
-        const analysis = analyses.find(a => a.id === analysisId);
-        if (analysis) { handleImportAnalysisToArticle(analysis, targetCode); playUISound('confirm'); }
-        setIsDraggingAnalysis(false); setDraggedAnalysisId(null); return;
-    }
-    const textData = e.dataTransfer.getData('text/plain') || e.dataTransfer.getData('text'); 
-    const isInternal = e.dataTransfer.types.includes(MIME_ARTICLE) || e.dataTransfer.types.includes(MIME_MEASUREMENT) || e.dataTransfer.types.includes('articleId'); 
-    if (textData && !isInternal) { try { const payload = JSON.parse(textData); if (payload && payload.type === 'CROSS_TAB_WBS_BUNDLE') { setWbsOptionsContext({ type: 'import', payload, initialName: payload.category.name, position: 'bottom' }); return; } } catch (err) {} handleDropContent(textData); }
-  };
-  const handleWorkspaceDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); if (draggedCategoryCode) { e.dataTransfer.dropEffect = 'none'; if (isWorkspaceDragOver) setIsWorkspaceDragOver(false); return; } const isExternal = !e.dataTransfer.types.includes(MIME_ARTICLE) && !e.dataTransfer.types.includes(MIME_MEASUREMENT); if (isExternal && !isWorkspaceDragOver) setIsWorkspaceDragOver(true); e.dataTransfer.dropEffect = 'copy'; };
-  const handleToolbarMouseDown = (e: React.MouseEvent) => { setIsDraggingToolbar(true); dragOffset.current = { x: e.clientX - toolbarPos.x, y: e.clientY - toolbarPos.y }; };
-  useEffect(() => { const handleGlobalMouseMove = (e: MouseEvent) => { if (isDraggingToolbar) { let nextX = e.clientX - dragOffset.current.x; let nextY = e.clientY - dragOffset.current.y; setToolbarPos({ x: nextX, y: nextY }); } }; const handleGlobalMouseUp = () => setIsDraggingToolbar(false); if (isDraggingToolbar) { window.addEventListener('mousemove', handleGlobalMouseMove); window.addEventListener('mouseup', handleGlobalMouseUp); } return () => { window.removeEventListener('mousemove', handleGlobalMouseMove); window.removeEventListener('mouseup', handleGlobalMouseUp); }; }, [isDraggingToolbar]);
-  const getFullProjectExportData = () => { return JSON.stringify({ gecolaData: { projectInfo, categories, articles, analyses }, exportedAt: new Date().toISOString(), app: "GeCoLa Cloud" }, null, 2); };
-  
-  const handleSmartSave = async (silent: boolean = false, forcePicker: boolean = false) => { 
-    const jsonString = getFullProjectExportData(); 
-    if ('showSaveFilePicker' in window) { 
-      try { 
-        let handle = (!forcePicker) ? currentFileHandle : null; 
-        if (!handle) { 
-          if (silent) return; 
-          handle = await (window as any).showSaveFilePicker({ suggestedName: `${projectInfo.title || 'Progetto'}.json`, types: [{ description: 'JSON Project File', accept: { 'application/json': ['.json'] }, }], }); 
-          setCurrentFileHandle(handle); 
-          const pickedName = handle.name.replace(/\.json$/i, '');
-          setProjectInfo(prev => ({ ...prev, title: pickedName }));
-        } 
-        if (silent) setIsAutoSaving(true); 
-        const writable = await handle.createWritable(); 
-        await writable.write(jsonString); 
-        await writable.close(); 
-      } catch (err: any) { 
-        if (err.name !== 'AbortError' && !silent) { setIsSaveModalOpen(true); } 
-      } finally { 
-        if (silent) setTimeout(() => setIsAutoSaving(false), 800); 
-      } 
-    } else { 
-      if (!silent) setIsSaveModalOpen(true); 
-    } 
-  };
-  
-  useEffect(() => { if (!currentFileHandle) return; const timeoutId = setTimeout(() => { handleSmartSave(true, false); }, 3000); return () => clearTimeout(timeoutId); }, [articles, categories, projectInfo, analyses, currentFileHandle]);
-
-  const handleOpenProject = async () => {
-    // PATTO DI FERRO: RIPRISTINO TASTO APRI CON FALLBACK ROBUSTO
-    if ('showOpenFilePicker' in window) {
-      try {
-        const [handle] = await (window as any).showOpenFilePicker({
-          types: [{ description: 'JSON Project File', accept: { 'application/json': ['.json'] } }],
-          multiple: false
+  // UI Persistence Effects
+  useEffect(() => {
+    setLayers(prev => {
+      if (!isBIMModeEnabled) {
+        // BIM mode turning OFF. Save current visibility of BIM layers and hide them.
+        const newOriginalVisibility: Record<string, boolean> = { ...bimVisibilityStateRef.current };
+        const newLayers = prev.map(layer => {
+          if (layer.id.startsWith("BIM_")) {
+            newOriginalVisibility[layer.id] = layer.visible;
+            return { ...layer, visible: false }; // Hide
+          }
+          return layer;
         });
-        const file = await handle.getFile();
-        const content = await file.text();
-        const data = JSON.parse(content);
-        if (data.gecolaData) {
-          setProjectInfo(data.gecolaData.projectInfo);
-          updateState(data.gecolaData.articles, data.gecolaData.categories, data.gecolaData.analyses || []);
-          setCurrentFileHandle(handle);
-          const pickedName = handle.name.replace(/\.json$/i, '');
-          setProjectInfo(prev => ({ ...prev, title: pickedName }));
-          playUISound('confirm');
-        } else {
-          alert("Formato file non valido.");
-        }
-        return; // Successo
-      } catch (err: any) {
-        if (err.name === 'AbortError') return;
-        console.warn("File System Access API non disponibile o negata, uso fallback legacy:", err);
+        bimVisibilityStateRef.current = newOriginalVisibility;
+        return newLayers;
+      } else {
+        // BIM mode turning ON. Restore based on stored visibility.
+        return prev.map(layer => {
+          if (layer.id.startsWith("BIM_")) {
+            const originalVisibility = bimVisibilityStateRef.current[layer.id];
+            // Default to true if not found in ref
+            return { ...layer, visible: originalVisibility !== undefined ? originalVisibility : true };
+          }
+          return layer;
+        });
       }
+    });
+  }, [isBIMModeEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem('selectedTool', selectedTool || '');
+  }, [selectedTool]);
+
+  useEffect(() => {
+    localStorage.setItem('layers', JSON.stringify(layers));
+  }, [layers]);
+
+  useEffect(() => {
+    localStorage.setItem('activeLayerId', activeLayerId);
+  }, [activeLayerId]);
+
+  useEffect(() => {
+    localStorage.setItem('defaultLineStyle', JSON.stringify(defaultLineStyle));
+  }, [defaultLineStyle]);
+
+  useEffect(() => {
+    localStorage.setItem('defaultHatchStyle', JSON.stringify(defaultHatchStyle));
+  }, [defaultHatchStyle]);
+
+  useEffect(() => {
+    localStorage.setItem('defaultTextStyle', JSON.stringify(defaultTextStyle));
+  }, [defaultTextStyle]);
+
+  useEffect(() => {
+    localStorage.setItem('eraserRadius', eraserRadius.toString());
+  }, [eraserRadius]);
+
+  useEffect(() => {
+    localStorage.setItem('eraserType', eraserType);
+  }, [eraserType]);
+
+  useEffect(() => {
+    localStorage.setItem('favoritePanels', JSON.stringify(favoritePanels));
+  }, [favoritePanels]);
+
+  useEffect(() => {
+    if (!isBIMModeEnabled && activeSidebarTab === 'bim') {
+      setActiveSidebarTab('penne');
+    }
+  }, [isBIMModeEnabled, activeSidebarTab]);
+
+  useEffect(() => {
+    localStorage.setItem('activeSidebarTab', activeSidebarTab);
+  }, [activeSidebarTab]);
+
+  useEffect(() => {
+    if (selectedTool === 'Line' || selectedTool === 'Circle') {
+      setActiveSidebarTab('penne');
+      setShowProperties(true);
+    }
+  }, [selectedTool]);
+
+  useEffect(() => {
+    const requiredLayers = [
+      { id: "BIM_Muri", name: "BIM_Muri", visible: true, frozen: false },
+      { id: "BIM_Porte", name: "BIM_Porte", visible: true, frozen: false },
+      { id: "BIM_Finestre", name: "BIM_Finestre", visible: true, frozen: false },
+      { id: "BIM_Arredi", name: "BIM_Arredi", visible: true, frozen: false },
+      { id: "BIM_Sanitari", name: "BIM_Sanitari", visible: true, frozen: false },
+      { id: "BIM_Impianti_Elettrici", name: "BIM_Impianti_Elettrici", visible: true, frozen: false },
+      { id: "BIM_Impianti_Idraulici", name: "BIM_Impianti_Idraulici", visible: true, frozen: false },
+      { id: "BIM_Finiture", name: "BIM_Finiture", visible: true, frozen: false },
+      { id: "BIM_Legenda", name: "BIM_Legenda", visible: true, frozen: false },
+      { id: "BIM_Locali", name: "BIM_Locali", visible: true, frozen: false },
+    ];
+    setLayers(prev => {
+      const updated = [...prev];
+      let changed = false;
+      requiredLayers.forEach(rl => {
+        if (!updated.some(l => l.id === rl.id || l.name === rl.name)) {
+          updated.push(rl);
+          changed = true;
+        }
+      });
+      return changed ? updated : prev;
+    });
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('rulerStyle', rulerStyle);
+  }, [rulerStyle]);
+
+  useEffect(() => {
+    localStorage.setItem('orthoMode', orthoMode.toString());
+  }, [orthoMode]);
+
+  useEffect(() => {
+    localStorage.setItem('showProperties', showProperties.toString());
+  }, [showProperties]);
+
+  useEffect(() => {
+    localStorage.setItem('selectedCategory', selectedCategory);
+  }, [selectedCategory]);
+
+  const handleOpenFile = async () => {
+    try {
+      if (!('showOpenFilePicker' in window)) {
+        alert("Salvataggio in locale non supportato da questo browser.");
+        return;
+      }
+      const [handle] = await (window as any).showOpenFilePicker({
+        types: [{ description: 'File GECOLA CAD', accept: {'application/json': ['.gcad']} }],
+      });
+      const file = await handle.getFile();
+      const contents = await file.text();
+      const data = JSON.parse(contents);
+      
+      if (data.entities) setEntities(data.entities);
+      if (data.layers) setLayers(data.layers);
+      if (data.tavole) setTavole(data.tavole);
+      if (data.measurements) setMeasurements(data.measurements);
+      if (data.defaultLineStyle) setDefaultLineStyle(data.defaultLineStyle);
+      
+      setFileHandle(handle);
+      setShortcutToast("File caricato!");
+      setTimeout(() => setShortcutToast(null), 2000);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSaveAsFile = async () => {
+    try {
+      if (!('showSaveFilePicker' in window)) {
+        alert("Salvataggio in locale non supportato da questo browser.");
+        return;
+      }
+      const handle = await (window as any).showSaveFilePicker({
+        types: [{ description: 'File GECOLA CAD', accept: {'application/json': ['.gcad']} }],
+        suggestedName: 'progetto_gecolacad.gcad'
+      });
+      setFileHandle(handle);
+      await saveToHandle(handle);
+      setShortcutToast("Salvato con nome!");
+      setTimeout(() => setShortcutToast(null), 2000);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAreaDetected = (result: { points: Point[], holes?: Point[][] }) => {
+    setDetectedAreaPoints(result);
+    setEditingAreaId(null);
+    setIsBIMAreaDialogOpen(true);
+  };
+
+  const handleEditBIMArea = (areaId: string) => {
+    const area = entities.find(e => e.id === areaId);
+    if (!area) return;
+    
+    setDetectedAreaPoints({
+      points: (area as any).bimPoints || (area as any).points || [],
+      holes: (area as any).holes
+    });
+    setEditingAreaId(areaId);
+    setIsBIMAreaDialogOpen(true);
+  };
+
+  const handleConfirmArea = (areaData: { type: string; name: string; color: string; zPlane: number; zElevation: number; objectHeight: number; hatch: 'SOLID' | 'ANSI31' | 'CROSS' | 'NONE' }) => {
+    if (!detectedAreaPoints) return;
+
+    if (editingAreaId) {
+      // UPDATE EXISTING
+      updateEntitiesWithHistory(prev => prev.map(e => {
+        if (e.id === editingAreaId) {
+          return {
+            ...e,
+            bimAreaType: areaData.type as any,
+            bimName: areaData.name,
+            backgroundColor: areaData.color,
+            bimHatchPattern: areaData.hatch,
+            pattern: areaData.hatch === 'NONE' ? 'SOLID' : areaData.hatch,
+            bimHeight: areaData.objectHeight,
+            bimZPlane: areaData.zPlane,
+            bimZElevation: areaData.zElevation,
+            isBIM: true
+          };
+        }
+        return e;
+      }));
+      setShortcutToast(`Area ${areaData.name} aggiornata ✅`);
+    } else {
+      // CREATE NEW
+      if (!detectedAreaPoints) return;
+      const pts = Array.isArray(detectedAreaPoints) ? detectedAreaPoints : detectedAreaPoints.points;
+      const hls = Array.isArray(detectedAreaPoints) ? undefined : detectedAreaPoints.holes;
+
+      const newArea: Entity = {
+        id: `bim-area-${Date.now()}`,
+        type: 'hatch', 
+        points: pts,
+        holes: hls,
+        color: 'rgba(0,0,0,0.5)',
+        strokeWidth: 1,
+        layer: 'BIM_Locali',
+        isBIM: true,
+        bimType: 'room',
+        bimAreaType: areaData.type as any,
+        bimName: areaData.name,
+        backgroundColor: areaData.color,
+        bimHatchPattern: areaData.hatch,
+        pattern: areaData.hatch === 'NONE' ? 'SOLID' : areaData.hatch,
+        bimHeight: areaData.objectHeight,
+        bimZPlane: areaData.zPlane,
+        bimZElevation: areaData.zElevation,
+        timestamp: Date.now()
+      } as any;
+
+      updateEntitiesWithHistory(prev => [...prev, newArea]);
+      setShortcutToast(`Rilevata ${areaData.name} (${areaData.type}) ✅`);
     }
     
-    // Fallback o se API non presente
-    fileInputRef.current?.click();
+    setTimeout(() => setShortcutToast(null), 4000);
+    setIsBIMAreaDialogOpen(false);
+    setDetectedAreaPoints(null);
+    setEditingAreaId(null);
   };
 
-  const handleLoadProjectLegacy = (e: React.ChangeEvent<HTMLInputElement>) => { 
-    const file = e.target.files?.[0]; 
-    if (!file) return; 
-    if (file.size > 3 * 1024 * 1024) {
-      alert("Il file è troppo grande (max 3MB).");
+  const handleImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    
+    if (extension === 'dxf') {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const text = e.target?.result as string;
+        try {
+          const { parseDXF } = await import("./utils/dxfImport");
+          const { entities: importedEntities, newLayers } = parseDXF(text, activeLayerId, layers);
+          
+          if (importedEntities.length === 0) {
+            alert("Nessun elemento DXF supportato trovato nel file o formato non riconosciuto.");
+            return;
+          }
+
+          if (newLayers.length > 0) {
+            setLayers(prev => [...prev, ...newLayers]);
+          }
+
+          updateEntitiesWithHistory(prev => [...prev, ...importedEntities]);
+          setShortcutToast(`Importati ${importedEntities.length} elementi CAD!`);
+          setTimeout(() => setShortcutToast(null), 3000);
+        } catch (err) {
+          console.error(err);
+          alert("Errore nel parsing del file DXF.");
+        }
+      };
+      reader.readAsText(file);
+    } else if (extension === 'dwg') {
+      setDwgFileName(file.name);
+      setShowDwgModal(true);
+    } else if (
+      file.type.startsWith('image/') || 
+      file.type.startsWith('video/') || 
+      file.type.startsWith('audio/') || 
+      file.type === 'application/pdf' ||
+      ['png', 'jpg', 'jpeg', 'gif', 'webp', 'mp4', 'webm', 'ogg', 'mp3', 'wav', 'pdf'].includes(extension || '')
+    ) {
+      let mediaType: 'image' | 'video' | 'audio' | 'pdf' = 'image';
+      if (file.type.startsWith('video/') || ['mp4', 'webm'].includes(extension || '')) mediaType = 'video';
+      else if (file.type.startsWith('audio/') || ['mp3', 'wav', 'ogg'].includes(extension || '')) mediaType = 'audio';
+      else if (file.type === 'application/pdf' || extension === 'pdf') mediaType = 'pdf';
+
+      if (mediaType === 'pdf') {
+         // Use pdf To image parser
+         import("./utils/pdfToImage").then(async ({ renderPdfToImage }) => {
+            const result = await renderPdfToImage(file);
+            if (result && result.isSinglePage) {
+               // Treat single page PDF as Image
+               mediaType = 'image';
+               const img = new Image();
+               img.onload = () => {
+                 const newEntity: any = {
+                   id: Date.now().toString(),
+                   type: 'image',
+                   point: { x: 0, y: 0 },
+                   width: img.width,
+                   height: img.height,
+                   src: result.src,
+                   mediaType,
+                   name: file.name,
+                   layer: activeLayerId,
+                   color: '#000000',
+                   lineWidth: 1,
+                   dashed: false,
+                   mode: 'CAD'
+                 };
+                 const maxD = 600;
+                 if (img.width > maxD || img.height > maxD) {
+                    const scale = maxD / Math.max(img.width, img.height);
+                    newEntity.width = img.width * scale;
+                    newEntity.height = img.height * scale;
+                 }
+                 updateEntitiesWithHistory(prev => [...prev, newEntity]);
+                 setShortcutToast(`${file.name} (1 pagina) importato come immagine!`);
+                 setTimeout(() => setShortcutToast(null), 3000);
+               };
+               img.src = result.src;
+            } else {
+               // Multipage or failed to render: fallback to PDF reader or use DataURL
+               const reader = new FileReader();
+               reader.onload = (e) => {
+                 const src = e.target?.result as string;
+                 const newEntity: any = {
+                   id: Date.now().toString(),
+                   type: 'image',
+                   point: { x: 0, y: 0 },
+                   width: 500,
+                   height: 700,
+                   src,
+                   mediaType: 'pdf',
+                   name: file.name,
+                   layer: activeLayerId,
+                   color: '#000000',
+                   lineWidth: 1,
+                   dashed: false,
+                   mode: 'CAD'
+                 };
+                 updateEntitiesWithHistory(prev => [...prev, newEntity]);
+                 setShortcutToast(`${file.name} importato!`);
+                 setTimeout(() => setShortcutToast(null), 3000);
+               };
+               reader.readAsDataURL(file);
+            }
+         }).catch(err => {
+            console.error("Failed to load pdfToImage utility", err);
+         });
+         event.target.value = '';
+         return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const src = e.target?.result as string;
+        
+        let width = 200;
+        let height = 200;
+        
+        if (mediaType === 'image') {
+           const img = new Image();
+           img.onload = () => {
+             const newEntity: any = {
+               id: Date.now().toString(),
+               type: 'image',
+               point: { x: 0, y: 0 },
+               width: img.width,
+               height: img.height,
+               src,
+               mediaType,
+               name: file.name,
+               layer: activeLayerId,
+               color: '#000000',
+               lineWidth: 1,
+               dashed: false,
+               mode: 'CAD'
+             };
+             // Calculate a reasonable scaled size
+             const maxD = 600;
+             if (img.width > maxD || img.height > maxD) {
+                const scale = maxD / Math.max(img.width, img.height);
+                newEntity.width = img.width * scale;
+                newEntity.height = img.height * scale;
+             }
+             updateEntitiesWithHistory(prev => [...prev, newEntity]);
+             setShortcutToast(`${file.name} importato!`);
+             setTimeout(() => setShortcutToast(null), 3000);
+           };
+           img.src = src;
+        } else {
+           // For PDF, Video, Audio
+           if (mediaType === 'pdf') { width = 500; height = 700; }
+           else if (mediaType === 'video') { width = 640; height = 360; }
+           else if (mediaType === 'audio') { width = 300; height = 50; }
+           
+           const newEntity: any = {
+             id: Date.now().toString(),
+             type: 'image',
+             point: { x: 0, y: 0 },
+             width,
+             height,
+             src,
+             mediaType,
+             name: file.name,
+             layer: activeLayerId,
+             color: '#000000',
+             lineWidth: 1,
+             dashed: false,
+             mode: 'CAD'
+           };
+           updateEntitiesWithHistory(prev => [...prev, newEntity]);
+           setShortcutToast(`${file.name} importato!`);
+           setTimeout(() => setShortcutToast(null), 3000);
+        }
+      };
+      reader.readAsDataURL(file);
+    } else {
+      alert("Formato non supportato. Selezionare .dxf, .dwg, Immagini, Video, Audio o PDF.");
+    }
+    
+    // reset input so the same file can be imported again
+    event.target.value = '';
+  };
+
+  const handleImportGemini = () => {
+    if (!geminiDslScript) return;
+    try {
+      const p = parseScriptToEntities(geminiDslScript, { x: Number(geminiInsertX), y: Number(geminiInsertY) }, activeLayerId);
+      
+      // Automatic Layer Addition if any referred layers don't exist!
+      const existingNames = new Set(layers.map(l => l.name));
+      const layersToCreate: Layer[] = [];
+      for (const reqLayer of p.referencedLayers) {
+        if (!existingNames.has(reqLayer)) {
+          layersToCreate.push({
+            id: reqLayer,
+            name: reqLayer,
+            visible: true,
+            frozen: false
+          });
+        }
+      }
+      if (layersToCreate.length > 0) {
+        setLayers(prev => [...prev, ...layersToCreate]);
+      }
+
+      updateEntitiesWithHistory(prev => [...prev, ...p.entities]);
+      setShortcutToast(`Importati ${p.entities.length} elementi parametrici!`);
+      setTimeout(() => setShortcutToast(null), 3000);
+    } catch (err) {
+      console.error(err);
+      alert("Errore nell'importazione degli oggetti geometrici.");
+    }
+  };
+
+  const cadCanvasRef = useRef<any>(null);
+
+  // Automatic Layer Selection based on style/pen
+  // Matita 2H -> Layer 0
+  // HB, CAD -> p1, p2, p4
+  useEffect(() => {
+    if (defaultLineStyle.mode === 'pencil' && defaultLineStyle.color === '#bbbbbb') {
+      setActiveLayerId("0"); // Schizzo / Costruzione
+    } else if (defaultLineStyle.mode === 'ink') {
+      if (defaultLineStyle.lineWidth === 0.25) setActiveLayerId("p1");
+      else if (defaultLineStyle.lineWidth === 0.35) setActiveLayerId("p2");
+      else if (defaultLineStyle.lineWidth >= 0.5) setActiveLayerId("p4");
+    }
+  }, [defaultLineStyle.mode, defaultLineStyle.lineWidth, defaultLineStyle.color]);
+
+  // Gestione Appunti (Copy & Paste) per oggetti CAD, immagini e testi (Gecolacad 7.1)
+  useEffect(() => {
+    const handlePaste = async (e: ClipboardEvent) => {
+      // Se l'utente sta scrivendo in un campo di testo o area, lascia fare al browser
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        return;
+      }
+
+      e.preventDefault();
+      const clipboardData = e.clipboardData;
+      if (!clipboardData) return;
+
+      // 1. Controlla se ci sono files negli appunti (es. immagini copiate o screenshot)
+      const files = clipboardData.files;
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const src = event.target?.result as string;
+              if (src) {
+                const point = cadCanvasRef.current?.getCurrentMousePosition() || { x: 100, y: 100 };
+                
+                const img = new Image();
+                img.onload = () => {
+                  const ar = img.naturalWidth / img.naturalHeight || 1;
+                  const defaultWidth = 300; // larghezza predefinita per inserimento CAD
+                  const defaultHeight = defaultWidth / ar;
+
+                  const newImageEntity: Entity = {
+                    id: `img-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                    type: 'image',
+                    color: '#000000',
+                    lineWidth: 1,
+                    layer: activeLayerId,
+                    point: { x: point.x - defaultWidth / 2, y: point.y - defaultHeight / 2 },
+                    width: defaultWidth,
+                    height: defaultHeight,
+                    src: src,
+                    name: file.name || 'Immagine Incollata',
+                    angle: 0,
+                    aspectRatio: ar,
+                    opacity: 1
+                  } as any;
+
+                  setEntities(prev => {
+                    commitToHistory(prev);
+                    return [...prev, newImageEntity];
+                  });
+
+                  setShortcutToast("Immagine incollata nell'area di lavoro!");
+                  setTimeout(() => setShortcutToast(null), 3000);
+                };
+                img.src = src;
+              }
+            };
+            reader.readAsDataURL(file);
+          }
+        }
+        return;
+      }
+
+      // 2. Controlla se c'è testo negli appunti (testo semplice o JSON serializzato del CAD)
+      const text = clipboardData.getData('text');
+      if (text) {
+        try {
+          if (text.startsWith('{"source":"gecolacad"') || (text.includes('"type":') && text.includes('"id":'))) {
+            const data = JSON.parse(text);
+            const entitiesToPaste: Entity[] = [];
+            
+            if (data.entities && Array.isArray(data.entities)) {
+              entitiesToPaste.push(...data.entities);
+            } else if (data.type && data.id) {
+              entitiesToPaste.push(data);
+            }
+
+            if (entitiesToPaste.length > 0) {
+              const point = cadCanvasRef.current?.getCurrentMousePosition() || { x: 100, y: 100 };
+              
+              // Calcola il rettangolo circoscritto (bounding box) per centrare il paste
+              let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+              entitiesToPaste.forEach((ent: any) => {
+                if (ent.type === 'line' || ent.type === 'dimension') {
+                  if (ent.start && ent.end) {
+                    minX = Math.min(minX, ent.start.x, ent.end.x);
+                    maxX = Math.max(maxX, ent.start.x, ent.end.x);
+                    minY = Math.min(minY, ent.start.y, ent.end.y);
+                    maxY = Math.max(maxY, ent.start.y, ent.end.y);
+                  }
+                } else if (ent.type === 'circle' || ent.type === 'arc') {
+                  if (ent.center) {
+                    minX = Math.min(minX, ent.center.x - (ent.radius || 0));
+                    maxX = Math.max(maxX, ent.center.x + (ent.radius || 0));
+                    minY = Math.min(minY, ent.center.y - (ent.radius || 0));
+                    maxY = Math.max(maxY, ent.center.y + (ent.radius || 0));
+                  }
+                } else if (ent.type === 'rectangle') {
+                  if (ent.p1 && ent.p2) {
+                    minX = Math.min(minX, ent.p1.x, ent.p2.x);
+                    maxX = Math.max(maxX, ent.p1.x, ent.p2.x);
+                    minY = Math.min(minY, ent.p1.y, ent.p2.y);
+                    maxY = Math.max(maxY, ent.p1.y, ent.p2.y);
+                  }
+                } else if (ent.type === 'text' || ent.type === 'image') {
+                  if (ent.point) {
+                    const w = ent.width || 100;
+                    const h = ent.height || 40;
+                    minX = Math.min(minX, ent.point.x);
+                    maxX = Math.max(maxX, ent.point.x + w);
+                    minY = Math.min(minY, ent.point.y);
+                    maxY = Math.max(maxY, ent.point.y + h);
+                  }
+                } else if (ent.type === 'hatch') {
+                  if (ent.points && ent.points.length > 0) {
+                    ent.points.forEach((p: Point) => {
+                      minX = Math.min(minX, p.x);
+                      maxX = Math.max(maxX, p.x);
+                      minY = Math.min(minY, p.y);
+                      maxY = Math.max(maxY, p.y);
+                    });
+                  }
+                }
+              });
+
+              const center = (minX !== Infinity) ? {
+                x: (minX + maxX) / 2,
+                y: (minY + maxY) / 2
+              } : { x: 100, y: 100 };
+
+              const dx = point.x - center.x;
+              const dy = point.y - center.y;
+
+              const preparedEntities = entitiesToPaste.map((ent: any) => {
+                const newId = `${ent.type}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+                let updated = { ...ent, id: newId, layer: activeLayerId };
+                
+                if (ent.point) {
+                  updated.point = { x: ent.point.x + dx, y: ent.point.y + dy };
+                }
+                if (ent.center) {
+                  updated.center = { x: ent.center.x + dx, y: ent.center.y + dy };
+                }
+                if (ent.start && ent.end) {
+                  updated.start = { x: ent.start.x + dx, y: ent.start.y + dy };
+                  updated.end = { x: ent.end.x + dx, y: ent.end.y + dy };
+                }
+                if (ent.p1 && ent.p2) {
+                  updated.p1 = { x: ent.p1.x + dx, y: ent.p1.y + dy };
+                  updated.p2 = { x: ent.p2.x + dx, y: ent.p2.y + dy };
+                }
+                if (ent.points) {
+                  updated.points = ent.points.map((p: any) => ({ x: p.x + dx, y: p.y + dy }));
+                }
+                return updated;
+              });
+
+              setEntities(prev => {
+                commitToHistory(prev);
+                return [...prev, ...preparedEntities];
+              });
+
+              setShortcutToast(`Incollati ${preparedEntities.length} oggetti CAD nel disegno!`);
+              setTimeout(() => setShortcutToast(null), 3000);
+              return;
+            }
+          }
+        } catch (err) {
+          // Fallback a disegno del testo standard
+        }
+
+        // Se non è un oggetto CAD formattato, incolla come testo normale sul foglio
+        const point = cadCanvasRef.current?.getCurrentMousePosition() || { x: 100, y: 100 };
+        const newTextEntity: Entity = {
+          id: `txt-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          type: 'text',
+          color: defaultLineStyle.color,
+          lineWidth: 1,
+          layer: activeLayerId,
+          point: { ...point },
+          text: text,
+          fontFamily: defaultTextStyle.fontFamily,
+          fontSize: defaultTextStyle.fontSize,
+          fontWeight: defaultTextStyle.fontWeight,
+          textAlign: defaultTextStyle.textAlign,
+        };
+
+        setEntities(prev => {
+          commitToHistory(prev);
+          return [...prev, newTextEntity];
+        });
+
+        setSelectedId(newTextEntity.id);
+        setActiveSidebarTab('testo');
+        
+        setShortcutToast("Testo incollato nel disegno!");
+        setTimeout(() => setShortcutToast(null), 3000);
+      }
+    };
+
+    const handleCopy = (e: ClipboardEvent) => {
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+        return;
+      }
+
+      if (!selectedId) return;
+      const selectedEnt = entities.find(el => el.id === selectedId);
+      if (selectedEnt) {
+        e.preventDefault();
+        const data = {
+          source: "gecolacad",
+          entities: [selectedEnt]
+        };
+        e.clipboardData?.setData('text/plain', JSON.stringify(data));
+        setShortcutToast("Oggetto CAD copiato negli appunti!");
+        setTimeout(() => setShortcutToast(null), 3000);
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    window.addEventListener('copy', handleCopy);
+    return () => {
+      window.removeEventListener('paste', handlePaste);
+      window.removeEventListener('copy', handleCopy);
+    };
+  }, [entities, selectedId, activeLayerId, defaultLineStyle, defaultTextStyle]);
+
+  const [toolboxPos, setToolboxPos] = useState(() => {
+    const saved = localStorage.getItem('toolboxPos');
+    return saved ? JSON.parse(saved) : { top: 16, right: 16 };
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef({ startX: 0, startY: 0, startTop: 0, startRight: 0 });
+
+  const startDragging = (e: React.MouseEvent) => {
+    setIsDragging(true);
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startTop: toolboxPos.top,
+      startRight: toolboxPos.right,
+    };
+  };
+
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const deltaX = e.clientX - dragRef.current.startX;
+      const deltaY = e.clientY - dragRef.current.startY;
+      setToolboxPos({
+        top: dragRef.current.startTop + deltaY,
+        right: dragRef.current.startRight - deltaX,
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+      localStorage.setItem('toolboxPos', JSON.stringify(toolboxPos));
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, toolboxPos]);
+
+  const handleRightClickShortcut = (e: React.MouseEvent) => {
+    // Se c'è il dialogo del raccordo aperto, il tasto destro applica
+    if (isRaccordoDialogOpen) {
+        // Simuliamo un invio al form del dialogo
+        const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
+        window.dispatchEvent(ev);
+        e.preventDefault();
+        return;
+    }
+
+    if (selectedTool === 'Eraser') {
+      const nextType = eraserType === 'pencil' ? 'all' : 'pencil';
+      setEraserType(nextType);
+      setShortcutToast(nextType === 'pencil' ? "Gomma: Matita (Bianca)" : "Gomma: China/Tutto (Gialla)");
+      setTimeout(() => setShortcutToast(null), 2000);
+      e.preventDefault();
       return;
     }
-    const reader = new FileReader(); 
-    reader.onload = (event) => { 
-      try { 
-        const content = event.target?.result as string; 
-        const data = JSON.parse(content); 
-        if (data.gecolaData) { 
-          setProjectInfo(data.gecolaData.projectInfo); 
-          updateState(data.gecolaData.articles, data.gecolaData.categories, data.gecolaData.analyses || []); 
-        } else { 
-          alert("Formato non valido."); 
-        } 
-        setCurrentFileHandle(null); 
-      } catch (error) { 
-        alert("Errore caricamento."); 
-      } 
-    }; 
-    reader.readAsText(file); 
-    e.target.value = ''; 
+
+    // If in Template tool, try rotating first
+    if (selectedTool === 'Template' || selectedTool === 'Select') {
+        const rotated = cadCanvasRef.current?.rotateMaskAtPoint(e);
+        if (rotated) {
+            e.preventDefault();
+            return;
+        }
+    }
+
+    // If in Template tool and didn't rotate, cancel it and switch to Select
+    if (selectedTool === 'Template') {
+      setSelectedTool('Select');
+      setSelectedTemplateId(null);
+      setShortcutToast("Strumento: Selezione (Magneti)");
+      setTimeout(() => setShortcutToast(null), 1500);
+      return;
+    }
+
+    // If not in a drawing tool, switch to Line
+    if (!["Line", "Muro", "Circle", "Arc", "Hatch", "Dimension"].includes(selectedTool || '')) {
+      setSelectedCategory("Disegno");
+      handleToolClick("Line");
+      setShortcutToast("Strumento: Linea");
+      setTimeout(() => setShortcutToast(null), 1500);
+    }
   };
-  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => { if (e.key === 'Enter') { const target = e.target as HTMLElement; if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') { if (target.tagName === 'TEXTAREA' && e.shiftKey) return; e.preventDefault(); const inputs = Array.from(document.querySelectorAll('input:not([disabled]), textarea:not([disabled])')); const index = inputs.indexOf(target as HTMLInputElement | HTMLTextAreaElement); if (index > -1 && index < inputs.length - 1) (inputs[index + 1] as HTMLElement).focus(); } } };
-  const toggleSuperCollapse = (code: string) => { playUISound('toggle'); setCollapsedSuperCodes(prev => { const next = new Set(prev); if (next.has(code)) next.delete(code); else next.add(code); return next; }); };
-  const activeCategory = useMemo(() => categories.find(c => c.code === selectedCategoryCode), [categories, selectedCategoryCode]);
-  const activeArticles = useMemo(() => articles.filter(a => a.categoryCode === selectedCategoryCode), [articles, selectedCategoryCode]);
-  const filteredCategories = useMemo(() => { return activeWbsContext === 'safety' ? categories.filter(c => c.type === 'safety') : categories.filter(c => c.type !== 'safety'); }, [categories, activeWbsContext]);
-  const topLevelCategories = useMemo(() => filteredCategories.filter(c => !c.parentId), [filteredCategories]);
+
+  const handleToolClick = (tool: string) => {
+    const guide = GUIDE_DATABASE[tool];
+    // Only show the floating help if the manual sidebar tab is ACTIVE or was already showing
+    if (guide && (activeSidebarTab === 'manuale' || showFloatingManual)) {
+      setHoveredGuide(guide);
+      setGuideLockedBy(tool);
+      setShowFloatingManual(true);
+    } else {
+      setShowFloatingManual(false);
+      setHoveredGuide(null);
+      setGuideLockedBy(null);
+    }
+
+           if (tool === "Raccordo") {
+             setSelectedTool("Raccordo");
+             // Non forzare l'apertura del dialog se è già aperto o se l'utente vuole solo usare il tool
+             // Lo apriamo solo la prima volta o se cliccano di nuovo
+             if (!isRaccordoDialogOpen) {
+                 setIsRaccordoDialogOpen(true);
+             }
+             setShowProperties(false);
+           } else if (tool === "Parallel") {
+      setSelectedTool("Parallel");
+      setCancelTrigger(prev => prev + 1);
+      setParallelTrigger(prev => prev + 1);
+      setShowProperties(false);
+      setIsRaccordoDialogOpen(false);
+    } else if (tool === "Penne") {
+      setActiveSidebarTab('penne');
+      setShowProperties(true);
+      if (selectedTool === 'Hatch' || selectedTool === 'Specchio' || selectedTool === 'Dimension') {
+        setSelectedTool('Select');
+      }
+    } else if (tool === "Maschere") {
+      setActiveSidebarTab('maschere');
+      setShowProperties(true);
+      if (selectedTool === 'Template') {
+        setSelectedTool('Select');
+      }
+    } else {
+      setSelectedTool(tool);
+      // Ensure the correct sidebar tab opens for specific tools as requested
+      if (tool === 'Hatch' || tool === 'Line' || tool === 'Circle' || tool === 'Muro') {
+        setActiveSidebarTab('penne');
+        setShowProperties(true);
+      } else if (tool === 'Testo') {
+        setActiveSidebarTab('testo');
+        setShowProperties(true);
+      } else if (tool === 'Dimension' || tool === 'Specchio') {
+        setActiveSidebarTab('penne');
+        setShowProperties(true);
+      } else {
+        // Close other function menus to free screen space
+        setShowProperties(false);
+        setIsRaccordoDialogOpen(false);
+      }
+    }
+  };
+
+  const handleGuideHover = (key: string) => {
+    // Disable automatic popup on hover as requested
+    // if (GUIDE_DATABASE[key]) {
+    //   setHoveredGuide(GUIDE_DATABASE[key]);
+    //   setGuideLockedBy(key);
+    // }
+  };
+
+  const handleGuideClick = (key: string) => {
+    if (guideLockedBy === key) {
+      setHoveredGuide(null);
+      setGuideLockedBy(null);
+    }
+  };
+
+  const selectedEntity = entities.find((e) => e.id === selectedId);
+
+  const updateEntity = (id: string, updates: Partial<Entity>) => {
+    setEntities((prev) =>
+      prev.map((e) => (e.id === id ? ({ ...e, ...updates } as Entity) : e)),
+    );
+  };
+
+  const categories = [
+    {
+      name: "Seleziona",
+      icon: MousePointer2,
+      tools: [{ name: "Select", icon: MousePointer2 }],
+    },
+    {
+      name: "Disegno",
+      icon: DraftingCompass,
+      tools: [
+        { name: "Line", icon: Minus },
+        { name: "Muro", icon: Building },
+        { name: "Circle", icon: Circle },
+        { name: "Arc", icon: History },
+        { name: "Hatch", icon: Grid },
+        { name: "Specchio", icon: MirrorIcon },
+        { name: "Testo", icon: Type },
+        { name: "Trim", icon: Scissors },
+        { name: "Eraser", icon: Eraser },
+        { name: "Parallel", icon: ParallelIcon },
+        { name: "CopiaVideo", icon: Camera },
+        { name: "Join", icon: Link },
+        { name: "Raccordo", icon: RaccordoIcon },
+        { name: "Move", icon: Move },
+        { name: "Copy", icon: Copy },
+        { name: "Dimension", icon: Ruler },
+        { name: "Penne", icon: Pen },
+        { name: "Maschere", icon: Square },
+        { name: "Cancella", icon: Trash2 },
+      ],
+    },
+    {
+      name: "BIM",
+      icon: Building,
+      tools: [
+        { name: "BIM_Porta", icon: Type },
+        { name: "BIM_Finestra", icon: Maximize2 },
+        { name: "BIM_Arredi", icon: Home },
+        { name: "BIM_Sanitari", icon: Droplet },
+        { name: "BIM_Elettrico", icon: Zap },
+        { name: "BIM_Idraulico", icon: Crosshair },
+        { name: "BIM_Finitura", icon: Grid },
+        { name: "BIM_Scansione", icon: Sparkles }
+      ],
+    },
+  ];
+
+  const handleFavoritesMouseDown = (e: React.MouseEvent, panelId: string) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    
+    e.preventDefault();
+    const panel = favoritePanels.find(p => p.id === panelId);
+    if (!panel) return;
+
+    setActiveDraggingId(panelId);
+
+    // Bring this panel to top layer
+    setFavoritePanels(prev => {
+      const targetPanel = prev.find(p => p.id === panelId);
+      if (!targetPanel) return prev;
+      return [...prev.filter(p => p.id !== panelId), targetPanel];
+    });
+
+    favoritesDragRef.current = {
+      isDragging: true,
+      panelId: panelId,
+      startX: e.clientX,
+      startY: e.clientY,
+      posX: panel.x,
+      posY: panel.y
+    };
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      if (!favoritesDragRef.current?.isDragging) return;
+      const refData = favoritesDragRef.current;
+      if (refData.panelId !== panelId) return;
+
+      const dx = moveEvent.clientX - refData.startX;
+      const dy = moveEvent.clientY - refData.startY;
+      
+      // We apply a very subtle damping factor to mouse moves to make dragging feel smooth and premium (rallentato/ammortizzato)
+      const targetX = refData.posX + dx;
+      const targetY = refData.posY + dy;
+
+      let isDocked: 'left' | 'right' | null = null;
+
+      // Docking thresholds based on screen borders
+      if (targetX < 45) {
+        isDocked = 'left';
+      } else if (window.innerWidth - moveEvent.clientX < 240) {
+        isDocked = 'right';
+      }
+
+      setFavoritePanels(prev => prev.map(p => {
+        if (p.id === panelId) {
+          return {
+            ...p,
+            x: isDocked === 'left' ? 0 : (isDocked === 'right' ? window.innerWidth - 65 : Math.max(10, Math.min(window.innerWidth - 100, targetX))),
+            y: isDocked ? p.y : Math.max(50, Math.min(window.innerHeight - 200, targetY)),
+            isDocked
+          };
+        }
+        return p;
+      }));
+    };
+
+    const handleMouseUp = () => {
+      if (favoritesDragRef.current) {
+        favoritesDragRef.current.isDragging = false;
+      }
+      setActiveDraggingId(null);
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const getToolIcon = (name: string) => {
+    for (const cat of categories) {
+      const found = cat.tools.find(t => t.name === name);
+      if (found) return found.icon;
+    }
+    return null;
+  };
+
+  // Undo/Redo
+  const [history, setHistory] = useState<Entity[][]>([[]]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+
+  const historyIndexRef = useRef(historyIndex);
+  const historyRef = useRef(history);
+
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  const historyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const areEntitiesEqual = (list1: Entity[], list2: Entity[]) => {
+    if (list1 === list2) return true;
+    if (!list1 || !list2) return list1 === list2;
+    if (list1.length !== list2.length) return false;
+    for (let i = 0; i < list1.length; i++) {
+      if (list1[i] !== list2[i]) {
+        if (JSON.stringify(list1[i]) !== JSON.stringify(list2[i])) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  const undo = () => {
+    if (historyTimeoutRef.current) {
+        clearTimeout(historyTimeoutRef.current);
+        historyTimeoutRef.current = null;
+    }
+    if (historyIndex > 0) {
+      setHistoryIndex((prev) => prev - 1);
+      setEntities(history[historyIndex - 1]);
+    }
+  };
+
+  const redo = () => {
+    if (historyTimeoutRef.current) {
+        clearTimeout(historyTimeoutRef.current);
+        historyTimeoutRef.current = null;
+    }
+    if (historyIndex < history.length - 1) {
+      setHistoryIndex((prev) => prev + 1);
+      setEntities(history[historyIndex + 1]);
+    }
+  };
+
+  const updateEntitiesSilent = (
+    newEntities: React.SetStateAction<Entity[]>,
+  ) => {
+    if (historyTimeoutRef.current) {
+        clearTimeout(historyTimeoutRef.current);
+        historyTimeoutRef.current = null;
+    }
+    setEntities(newEntities);
+  };
+
+  const commitToHistory = (snapshotToSave?: Entity[]) => {
+    if (historyTimeoutRef.current) {
+        clearTimeout(historyTimeoutRef.current);
+        historyTimeoutRef.current = null;
+    }
+    const targetSnapshot = snapshotToSave || entities;
+    const currentIdx = historyIndexRef.current;
+    const currentHistory = historyRef.current;
+    const lastState = currentHistory[currentIdx];
+
+    if (lastState && areEntitiesEqual(lastState, targetSnapshot)) {
+      return; // Do not commit duplicates
+    }
+
+    setHistory((prevHistory) => {
+      const newHistory = prevHistory.slice(0, currentIdx + 1);
+      newHistory.push(targetSnapshot);
+      return newHistory;
+    });
+    setHistoryIndex((prevIndex) => prevIndex + 1);
+  };
+
+  const updateEntitiesWithHistory = (
+    newEntities: React.SetStateAction<Entity[]>,
+  ) => {
+    if (historyTimeoutRef.current) {
+        clearTimeout(historyTimeoutRef.current);
+    }
+    setEntities((prev) => {
+      const next =
+        typeof newEntities === "function" ? (newEntities as Function)(prev) : newEntities;
+      
+      historyTimeoutRef.current = setTimeout(() => {
+        const currentIdx = historyIndexRef.current;
+        const currentHistory = historyRef.current;
+        const lastState = currentHistory[currentIdx];
+
+        if (lastState && areEntitiesEqual(lastState, next)) {
+          historyTimeoutRef.current = null;
+          return; // Do not commit duplicates
+        }
+
+        setHistory((prevHistory) => {
+          const newHistory = prevHistory.slice(0, currentIdx + 1);
+          newHistory.push(next);
+          return newHistory;
+        });
+        setHistoryIndex((prevIndex) => prevIndex + 1);
+        historyTimeoutRef.current = null;
+      }, 50);
+
+      return next;
+    });
+  };
+
+  // Auto-show properties when entity selected
+  useEffect(() => {
+    if (selectedId) setShowProperties(true);
+  }, [selectedId]);
+
+  const selectedCategoryTools =
+    categories.find((c) => c.name === selectedCategory)?.tools || [];
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Shortcuts only if not in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      const key = e.key.toLowerCase();
+      
+      // Undo/Redo
+      if ((e.ctrlKey || e.metaKey) && key === 'z') {
+        e.preventDefault();
+        undo();
+      } else if ((e.ctrlKey || e.metaKey) && key === 'y') {
+        e.preventDefault();
+        redo();
+      }
+
+      // Escape to reset
+      if (e.key === 'Escape') {
+        setSelectedTool('Select');
+        setSelectedId(null);
+        setCancelTrigger(prev => prev + 1);
+      }
+
+      // Shift or F for Bloc Fn (Hold to activate)
+      if (e.key === 'Shift' || key === 'f') {
+        setIsContinuousMode(true);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      if (e.key === 'Shift' || key === 'f') {
+        setIsContinuousMode(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [historyIndex, history, entities]); // Dependencies for shortcuts
 
   return (
-    <div className="h-screen flex flex-col bg-[#2c3e50] font-sans overflow-hidden text-slate-800" onDragOver={(e) => { e.preventDefault(); }} onDragEnter={(e) => { e.preventDefault(); }} onClick={() => { if(!globalAudioCtx) globalAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)(); globalAudioCtx.resume(); setIsSaveMenuOpen(false); setIsPrintMenuOpen(false); }}>
-      <input type="file" ref={fileInputRef} onChange={handleLoadProjectLegacy} className="hidden" accept=".json" />
-      {!isOnline && user && user !== 'visitor' && (
-        <div className="fixed inset-0 z-[9999] bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center text-center p-6 animate-in fade-in duration-500">
-            <div className="bg-red-600 p-8 rounded-[3rem] shadow-[0_0_80px_rgba(220,38,38,0.4)] mb-10 animate-pulse border-4 border-white/20"><ShieldAlert className="w-24 h-24 text-white" /></div>
-            <h2 className="text-5xl font-black text-white uppercase tracking-tighter mb-4 italic">Security Link Broken</h2>
-            <div className="h-1.5 w-32 bg-red-600 rounded-full mb-6"></div>
-            <p className="text-slate-400 max-w-lg text-xl font-bold leading-relaxed mb-12">Connessione con il server GeCoLa interrotta.<br/><span className="text-red-500 uppercase tracking-widest font-black">Il software è temporaneamente sospeso</span><br/>per garantire l'integrità del database.</p>
-            <div className="flex flex-col items-center gap-4"><div className="flex items-center gap-3 bg-slate-800/80 px-8 py-4 rounded-full border border-slate-700 shadow-2xl"><Loader2 className="w-6 h-6 text-blue-500 animate-spin" /><span className="text-sm font-black uppercase tracking-[0.2em] text-blue-100">Riconnessione al Cloud GeCoLa...</span></div><p className="text-[10px] text-slate-600 font-black uppercase tracking-widest">Engineering Safety Protocol Active</p></div>
-        </div>
-      )}
-      {authLoading ? (
-        <div className="flex-1 flex flex-col items-center justify-center bg-slate-900 text-white"><Loader2 className="w-12 h-12 text-blue-500 animate-spin mb-4" /><p className="font-black uppercase tracking-widest text-xs">Sistema in Avvio...</p></div>
-      ) : !user ? (
-        <Login onVisitorLogin={handleVisitorLogin} />
-      ) : (
-        <>
-          {!isFocusMode && (
-            <div className="bg-[#2c3e50] shadow-md z-[100] h-14 flex items-center justify-between px-6 border-b border-slate-600 flex-shrink-0">
-                <div className="flex items-center space-x-3 w-72">
-                    <div className="bg-orange-500 p-2 rounded-xl shadow-lg"><Calculator className="w-7 h-7 text-white" /></div>
-                    <span className="font-bold text-lg text-white">GeCoLa <span className="font-light opacity-80">v12.0.0</span></span>
-                    <button onClick={() => setIsManualOpen(true)} className="ml-2 p-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-lg transition-all hover:scale-110 active:scale-95 group relative"><HelpCircle className="w-5 h-5" /><span className="absolute -bottom-10 left-1/2 -translate-x-1/2 -translate-y-0 bg-slate-800 text-white text-[9px] font-black uppercase px-2 py-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-[9999]">Manuale Operativo</span></button>
-                    <button onClick={() => setIsAnalystModalOpen(true)} className="ml-2 p-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl shadow-lg transition-all hover:scale-110 active:scale-95 group relative"><Bot className="w-5 h-5" /><span className="absolute -bottom-10 left-1/2 -translate-x-1/2 -translate-y-0 bg-slate-800 text-white text-[9px] font-black uppercase px-2 py-1 rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-[9999]">Analista IA</span></button>
-                </div>
-                <div className="flex-1 px-6 flex justify-center items-center gap-6">
-                    {isVisitor && (
-                        <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-1.5 bg-blue-600/20 border border-blue-500/50 px-3 py-1 rounded-full text-blue-200 text-[10px] font-black uppercase tracking-widest animate-pulse"><Sparkles className="w-3 h-3" /> Demo Mode</div>
-                            <div className={`px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest border transition-all ${articles.length >= 15 ? 'bg-red-600 border-red-500 text-white animate-bounce' : 'bg-slate-800 border-slate-700 text-slate-400'}`}>Voci: {articles.length} / 15</div>
-                        </div>
-                    )}
-                    <div className="flex items-center gap-3 bg-slate-800/50 px-6 py-2 rounded-t-2xl border border-slate-700 text-white font-bold cursor-pointer hover:bg-slate-700 transition-all shadow-inner group" onClick={() => setIsSettingsModalOpen(true)}>
-                        {isOnline && (
-                          <div className={`w-2.5 h-2.5 rounded-full ${isAutoSaving ? 'bg-green-400 animate-pulse' : 'bg-green-600 shadow-[0_0_8px_rgba(22,163,74,0.6)]'}`}></div>
-                        )}
-                        <div className="flex flex-col items-start leading-none">
-                          <span className="truncate max-w-[320px] text-xl tracking-tight font-black uppercase italic">{projectInfo.title}</span>
-                          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">OPERATORE: {user !== 'visitor' ? (user as FirebaseUser).email : 'VISITATORE'}</span>
-                        </div>
-                        <Settings className="w-7 h-7 text-slate-400 group-hover:text-blue-400 group-hover:rotate-90 transition-all duration-500" />
-                    </div>
-                    <div className="flex items-center bg-slate-800/30 rounded-full px-2 py-1 gap-1">
-                        <button onClick={handleUndo} disabled={history.length === 0} className="p-1 text-slate-300 hover:text-white disabled:opacity-20 transition-all hover:scale-110"><Undo2 className="w-4 h-4" /></button>
-                        <div className="w-px h-4 bg-slate-600"></div>
-                        <button onClick={handleRedo} disabled={future.length === 0} className="p-1 text-slate-300 hover:text-white disabled:opacity-20 transition-all hover:scale-110"><Redo2 className="w-4 h-4" /></button>
-                    </div>
-                </div>
-                <div className="flex items-center space-x-2">
-                    <button onClick={handleResetProject} className="p-2 transition-all text-slate-300 hover:text-emerald-400 hover:scale-110 active:scale-95 group relative" title="Nuovo Progetto"><FilePlus2 className="w-6 h-6" /><span className="absolute -bottom-10 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[9px] font-black uppercase px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap pointer-events-none z-[9999]">Nuovo Progetto</span></button>
-                    <button onClick={handleOpenProject} className="p-2 transition-colors text-slate-300 hover:text-orange-400" title="Apri (.json)"><FolderOpen className="w-5 h-5" /></button>
-                    <div className="relative">
-                        <button onClick={(e) => { e.stopPropagation(); setIsSaveMenuOpen(!isSaveMenuOpen); setIsPrintMenuOpen(false); }} className="p-2 transition-colors flex items-center gap-1 text-slate-300 hover:text-blue-400"><Save className="w-5 h-5" /><ChevronDown className={`w-3 h-3 transition-transform ${isSaveMenuOpen ? 'rotate-180' : ''}`} /></button>
-                        {isSaveMenuOpen && (
-                            <div className="absolute right-0 top-full mt-2 w-64 bg-white shadow-2xl rounded-lg py-2 z-[100] border border-gray-200 overflow-hidden text-left animate-in fade-in zoom-in-95 duration-150">
-                                <button onClick={() => { setIsSaveMenuOpen(false); handleSmartSave(false, true); playUISound('confirm'); }} className="w-full px-4 py-3 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-3 border-b border-gray-100"><Coins className="w-4 h-4 text-blue-600" /><b>Salva (.json)</b></button>
-                                <button onClick={() => { setIsSaveMenuOpen(false); generateComputoExcel(projectInfo, categories, articles); }} className="w-full px-4 py-3 text-sm text-gray-700 hover:bg-green-50 flex items-center gap-3 border-b border-gray-100"><FileSpreadsheet className="w-4 h-4 text-green-600" /><b>Excel (.xls)</b></button>
-                            </div>
-                        )}
-                    </div>
-                    <div className="relative">
-                        <button onClick={(e) => { e.stopPropagation(); setIsPrintMenuOpen(!isPrintMenuOpen); setIsSaveMenuOpen(false); }} className="p-2 transition-colors text-slate-300 hover:text-white flex items-center gap-1"><FileText className="w-5 h-5" /><ChevronDown className={`w-3 h-3 transition-transform ${isPrintMenuOpen ? 'rotate-180' : ''}`} /></button>
-                        {isPrintMenuOpen && (
-                            <div className="absolute right-0 top-full mt-2 w-72 bg-white shadow-2xl rounded-lg py-2 z-[100] border border-gray-200 overflow-hidden text-left animate-in fade-in zoom-in-95 duration-150">
-                                <button onClick={() => { setIsPrintMenuOpen(false); generateComputoMetricPdf(projectInfo, categories, articles); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 flex items-center gap-3 font-bold"><FileText className="w-4 h-4 text-blue-500" />Computo Estimativo</button>
-                                <button onClick={() => { setIsPrintMenuOpen(false); generateComputoSicurezzaPdf(projectInfo, categories, articles); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-orange-50 flex items-center gap-3 font-bold"><ShieldAlert className="w-4 h-4 text-orange-500" />Computo Oneri Sicurezza</button>
-                                <button onClick={() => { setIsPrintMenuOpen(false); generateElencoPrezziPdf(projectInfo, categories, articles); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 flex items-center gap-3"><AlignLeft className="w-4 h-4 text-slate-500" />Elenco Prezzi Unitari</button>
-                                <button onClick={() => { setIsPrintMenuOpen(false); generateManodoperaPdf(projectInfo, categories, articles); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 flex items-center gap-3"><User className="w-4 h-4 text-cyan-600" />Stima Manodopera</button>
-                                <button onClick={() => { setIsPrintMenuOpen(false); generateAnalisiPrezziPdf(projectInfo, analyses); }} className="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-blue-50 flex items-center gap-3"><TestTubes className="w-4 h-4 text-purple-600" />Analisi Nuovi Prezzi</button>
-                            </div>
-                        )}
-                    </div>
-                    <button onClick={handleLogout} className="p-2 text-red-400 hover:text-white ml-2 transition-colors"><LogOut className="w-5 h-5" /></button>
-                </div>
+    <div className="flex flex-col h-screen bg-neutral-100 text-neutral-900">
+      {/* Ribbon */}
+      <header className="h-14 border-b border-neutral-300 bg-white flex">
+        <div className="flex items-center px-4 border-r border-neutral-300 bg-neutral-900 text-white select-none mr-2 relative">
+          <span className="font-sans font-black tracking-wider text-sm whitespace-nowrap">GECOLA <span className="text-amber-400">CAD</span></span>
+          {fileHandle && (
+            <div className="absolute top-1 right-2 flex items-center justify-center pointer-events-none">
+              <div className={`w-2 h-2 rounded-full ${isSaving ? 'bg-amber-400' : 'bg-emerald-500'} transition-colors duration-300 drop-shadow-md`} title={isSaving ? "Salvataggio in corso..." : "Auto-save attivo"}></div>
             </div>
           )}
-          <div className={`flex flex-1 overflow-hidden transition-all duration-500 ${isFocusMode ? 'bg-[#1e293b]' : ''}`}>
-            {!isFocusMode && (
-                <div className="w-[20.4rem] bg-slate-200 border-r border-slate-300 flex flex-col flex-shrink-0 z-40 shadow-lg transition-all duration-300 relative pl-[10px]">
-                <div onMouseEnter={() => startScroll(-3)} onMouseLeave={stopScroll} onDragOver={(e) => { e.preventDefault(); startScroll(-3); }} onDragEnter={(e) => { e.preventDefault(); startScroll(-3); }} onDragLeave={stopScroll} className="absolute top-[135px] left-0 right-0 h-10 z-[100] cursor-n-resize opacity-0 hover:opacity-100 transition-opacity bg-gradient-to-b from-blue-500/40 to-transparent flex items-center justify-center pointer-events-auto"><ChevronUp className={`text-blue-600 animate-bounce w-6 h-6 ${draggedCategoryCode || isDraggingArticle || isDraggingAnalysis ? 'opacity-50' : 'opacity-100'}`} /></div>
-                <div onMouseEnter={() => startScroll(3)} onMouseLeave={stopScroll} onDragOver={(e) => { e.preventDefault(); startScroll(3); }} onDragEnter={(e) => { e.preventDefault(); startScroll(3); }} onDragLeave={stopScroll} className="absolute bottom-0 left-0 right-0 h-16 z-[100] cursor-s-resize opacity-0 hover:opacity-100 transition-opacity bg-gradient-to-t from-blue-500/40 to-transparent flex items-center justify-center pointer-events-auto"><ChevronDown className={`text-blue-600 animate-bounce w-8 h-8 ${draggedCategoryCode || isDraggingArticle || isDraggingAnalysis ? 'opacity-50' : 'opacity-100'}`} /></div>
-                <div className="px-4 py-2.5 bg-slate-300 border-b border-slate-400 flex justify-between items-center shrink-0 shadow-sm"><div className="flex items-baseline gap-2"><span className="text-[10px] font-black uppercase tracking-widest text-slate-500">TOTALE:</span><span className="font-mono font-black text-slate-900 text-sm tracking-tighter">{formatCurrency(totalForView)}</span></div></div>
-                <div className="p-1 bg-slate-300/40 border-b border-slate-400 grid grid-cols-5 gap-1 shrink-0">
-                    <button onClick={() => { handleViewChange('lavori'); setActiveWbsContext('work'); }} className={`py-2 text-[8.5px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 ${viewMode === 'COMPUTO' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-600 hover:bg-white'}`}><HardHat className="w-3.5 h-3.5" /> Lavori</button>
-                    <button onClick={() => { handleViewChange('sicurezza'); setActiveWbsContext('safety'); }} className={`py-2 text-[8.5px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 ${viewMode === 'SICUREZZA' ? 'bg-orange-600 text-white shadow-lg' : 'text-slate-600 hover:bg-white'}`}><ShieldAlert className="w-3.5 h-3.5" /> Sicur.</button>
-                    <button onClick={() => setViewMode('ANALISI')} className={`py-2 text-[8.5px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 ${viewMode === 'ANALISI' ? 'bg-purple-600 text-white shadow-lg' : 'text-slate-600 hover:bg-white'}`}><TestTubes className="w-3.5 h-3.5" /> Analisi</button>
-                    <button onClick={() => setViewMode('SUMMARY')} className={`py-2 text-[8.5px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 ${viewMode === 'SUMMARY' ? 'bg-indigo-600 text-white shadow-lg' : 'text-slate-600 hover:bg-white'}`}><Layers className="w-3.5 h-3.5" /> Riepil.</button>
-                    <button onClick={() => setViewMode('CRONOPROGRAMMA')} className={`py-2 text-[8.5px] font-black uppercase rounded-lg transition-all flex flex-col items-center justify-center gap-1 ${viewMode === 'CRONOPROGRAMMA' ? 'bg-emerald-600 text-white shadow-lg' : 'text-slate-600 hover:bg-white'}`}><Calendar className="w-3.5 h-3.5" /> Crono</button>
-                </div>
-                <div className="p-1 bg-slate-300/20 border-b border-slate-400 grid grid-cols-4 gap-1 shrink-0">
-                    <button onClick={handleToggleAllCategories} title="ACCENDI/SPEGNI" className="py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-all text-slate-400 hover:text-yellow-500 flex flex-col items-center justify-center gap-1"><Lightbulb className="w-3.5 h-3.5" /><span className="text-[6.5px] font-black uppercase text-slate-400">Luci</span></button>
-                    <button onClick={handleAddWbs} title="NUOVA WBS" className="py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-all text-slate-400 hover:text-blue-600 flex flex-col items-center justify-center gap-1"><PlusCircle className="w-3.5 h-3.5" /><span className="text-[6.5px] font-black uppercase text-slate-400">WBS</span></button>
-                    <button onClick={handleAddSuperCategory} title="SUPER CATEGORIA" className="py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 transition-all text-slate-400 hover:text-orange-600 flex flex-col items-center justify-center gap-1"><FolderPlus className="w-3.5 h-3.5" /><span className="text-[6.5px] font-black uppercase text-slate-400">Super</span></button>
-                    <button onClick={handleToggleSurveyorGuard} title="SENTINELLA ATTIVA" className={`py-1.5 rounded-lg border transition-all flex flex-col items-center justify-center gap-1 ${isSurveyorGuardActive ? 'bg-emerald-50 border-emerald-200 text-emerald-600 shadow-inner' : 'bg-white border-slate-200 text-slate-400 hover:text-emerald-500'}`}><ShieldCheck className="w-3.5 h-3.5" /><span className={`text-[6.5px] font-black uppercase ${isSurveyorGuardActive ? 'text-emerald-500 font-black' : 'text-slate-400'}`}>Sentry</span></button>
-                </div>
-                <div ref={sidebarRef} className={`flex-1 overflow-y-auto scrollbar-hide overflow-x-visible ${activeWbsContext === 'safety' ? 'bg-orange-50/20' : 'bg-transparent'}`} onDrop={(e) => handleWbsDrop(e, null)}>
-                    <ul className="p-3 space-y-2 pb-5">
-                        {topLevelCategories.map((cat) => {
-                        const isInsideDropTarget = wbsDropTarget?.code === cat.code && wbsDropTarget?.position === 'inside';
-                        const childCategories = filteredCategories.filter(c => c.parentId === cat.code);
-                        const isChildSelected = childCategories.some(c => c.code === selectedCategoryCode);
-                        const isCollapsed = collapsedSuperCodes.has(cat.code);
-                        if (cat.isSuperCategory) {
-                            return (
-                                <li key={cat.id} className={`relative group/super transition-all ${!cat.isEnabled ? 'opacity-40 grayscale' : ''} ${lastMovedItemId === cat.code ? 'highlight-move' : ''}`} onDragOver={(e) => handleWbsDragOver(e, cat.code)} onDrop={(e) => handleWbsDrop(e, cat.code)}>
-                                    {wbsDropTarget?.code === cat.code && wbsDropTarget?.position === 'top' && !isDraggingArticle && !isDraggingAnalysis && (<div className="absolute -top-1 left-0 right-0 h-1.5 bg-blue-600 z-[60] shadow-[0_0_12px_rgba(37,99,235,1)] rounded-full animate-pulse"></div>)}
-                                    {wbsDropTarget?.code === cat.code && wbsDropTarget?.position === 'inside' && (<div className="absolute inset-0 border-2 border-orange-500 rounded-2xl bg-orange-500/10 pointer-events-none z-50 animate-pulse"><div className="absolute top-8 left-6 right-6 h-1 bg-blue-600 shadow-[0_0_12px_rgba(37,99,235,1)] rounded-full"></div></div>)}
-                                    <div className="flex flex-row items-end group" draggable onDragStart={(e) => handleWbsDragStart(e, cat.code)} onDragEnd={() => setDraggedCategoryCode(null)}>
-                                        <div onClick={() => toggleSuperCollapse(cat.code)} className={`px-4 py-1.5 rounded-t-xl border-t border-x text-[8px] font-black uppercase tracking-[0.2em] transition-all flex flex-row items-center gap-2 cursor-pointer select-none shadow-sm text-white max-w-[80%] overflow-hidden`} style={{ backgroundColor: isInsideDropTarget ? '#F97316' : (cat.color || '#CBD5E1'), borderColor: isInsideDropTarget ? '#EA580C' : (cat.color || '#94A3B8'), borderLeftWidth: isChildSelected ? '4px' : '1px', borderLeftColor: 'white' }}><GripVertical className="w-3 h-3 opacity-30" /><ChevronDown className={`w-3 h-3 transition-transform duration-300 ${isCollapsed ? '-rotate-90' : ''}`} /><span className="truncate">{cat.name}</span></div>
-                                        <div className="flex mb-0.5 ml-1 gap-1 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); handleEditCategory(cat); }} className="p-1.5 bg-white/80 border border-slate-300 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-white shadow-sm transition-all transform active:scale-90"><Settings className="w-3.5 h-3.5" /></button></div>
-                                    </div>
-                                    <div className={`rounded-b-2xl rounded-tr-2xl border transition-all duration-500 relative ${isInsideDropTarget ? 'border-orange-500 bg-orange-50 shadow-2xl scale-[1.01]' : 'bg-white shadow-sm'} ${isCollapsed ? 'p-0 h-[8px] overflow-hidden' : 'p-2 min-h-[40px]'}`} style={{ borderColor: !isInsideDropTarget ? (cat.color || '#CBD5E1') : undefined }}>
-                                        {!isCollapsed && (
-                                            <div className="animate-in fade-in duration-500">
-                                                <div className="flex flex-col gap-1.5">
-                                                  {childCategories.map(child => {
-                                                    const isSelectedChild = selectedCategoryCode === child.code;
-                                                    const isTargeted = wbsDropTarget?.code === child.code;
-                                                    return (
-                                                    <div key={child.id} draggable onDragStart={(e) => handleWbsDragStart(e, child.code)} onDragEnd={() => setDraggedCategoryCode(null)} onDragOver={(e) => handleWbsDragOver(e, child.code)} onDrop={(e) => handleWbsDrop(e, child.code)} className={`rounded-xl border-l-4 transition-all duration-300 cursor-pointer flex flex-col group/child relative overflow-visible ${isSelectedChild ? (activeWbsContext === 'safety' ? 'bg-orange-50 shadow-lg translate-x-1 border-orange-500 p-3' : 'bg-blue-50 shadow-lg translate-x-1 border-blue-500 p-3') : 'bg-white border-slate-100 hover:border-slate-300 px-3 py-1.5'} ${lastMovedItemId === child.code ? 'highlight-move' : ''} ${(isDraggingArticle || isDraggingAnalysis) && isTargeted ? 'ring-4 ring-green-500 border-green-600 z-50 shadow-[0_0_20px_rgba(34,197,94,0.4)]' : ''}`}>
-                                                      {isTargeted && wbsDropTarget?.position === 'top' && !isDraggingArticle && !isDraggingAnalysis && (<div className={`absolute -top-1.5 left-0 right-0 h-1.5 z-[60] rounded-full animate-pulse ${activeWbsContext === 'safety' ? 'bg-orange-600 shadow-[0_0_12px_rgba(234,88,12,1)]' : 'bg-blue-600 shadow-[0_0_12px_rgba(37,99,235,1)]'}`}></div>)}
-                                                      <div className="flex justify-between items-center" onClick={() => setSelectedCategoryCode(prev => prev === child.code ? '' : child.code)}>
-                                                          <div className="flex flex-col max-w-[65%]"><div className="flex items-center gap-2"><span className={`text-[8px] font-black font-mono ${isSelectedChild ? (activeWbsContext === 'safety' ? 'text-orange-700' : 'text-blue-700') : 'text-slate-400'}`}>{child.code}</span>{child.soaCategory && <span className={`text-[7px] font-black bg-slate-100 px-1 rounded ${isSelectedChild ? (activeWbsContext === 'safety' ? 'text-orange-800 bg-orange-200/50' : 'text-blue-800 bg-blue-200/50') : 'text-slate-50'}`}>{child.soaCategory}</span>}</div><span className={`font-black uppercase leading-none truncate ${isSelectedChild ? (activeWbsContext === 'safety' ? 'text-orange-900 text-[10px]' : 'text-blue-900 text-[10px]') : 'text-slate-600 text-[10px]'}`}>{child.name}</span></div>
-                                                          <div className="flex flex-col items-end gap-1 flex-shrink-0"><span className={`font-mono font-black text-[10px] ${isSelectedChild ? (activeWbsContext === 'safety' ? 'text-orange-700' : 'text-blue-700') : 'text-slate-400'}`}>{formatCurrency(categoryTotals[child.code] || 0)}</span><div className="flex items-center gap-1 opacity-0 group-hover/child:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); handleEditCategory(child); }} className={`p-1 transition-colors ${activeWbsContext === 'safety' ? 'text-orange-600 hover:text-blue-600' : 'text-blue-600 hover:text-orange-600'}`}><Settings className="w-3.3 h-3.3" /></button>{child.isLocked && <Lock className="w-3 h-3 text-red-500" />}</div></div>
-                                                      </div>
-                                                      {isTargeted && wbsDropTarget?.position === 'bottom' && !isDraggingArticle && !isDraggingAnalysis && (<div className={`absolute -bottom-1.5 left-0 right-0 h-1.5 z-[60] rounded-full animate-pulse ${activeWbsContext === 'safety' ? 'bg-orange-600 shadow-[0_0_12px_rgba(234,88,12,1)]' : 'bg-blue-600 shadow-[0_0_12px_rgba(37,99,235,1)]'}`}></div>)}
-                                                    </div>
-                                                  )})}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </li>
-                            );
-                        }
-                        const isSelected = selectedCategoryCode === cat.code;
-                        const isTargeted = wbsDropTarget?.code === cat.code;
-                        return (
-                         <li key={cat.id} className={`relative transition-all group/wbsrow-container ${!cat.isEnabled ? 'opacity-40 grayscale' : ''} ${lastMovedItemId === cat.code ? 'highlight-move' : ''}`} onDragOver={(e) => handleWbsDragOver(e, cat.code)} onDrop={(e) => handleWbsDrop(e, cat.code)}>
-                            {isTargeted && wbsDropTarget?.position === 'top' && !isDraggingArticle && !isDraggingAnalysis && (<div className={`absolute -top-1 left-0 right-0 h-1.5 z-[60] rounded-full animate-pulse ${activeWbsContext === 'safety' ? 'bg-orange-600 shadow-[0_0_15px_rgba(234,88,12,1)]' : 'bg-blue-600 shadow-[0_0_15px_rgba(37,99,235,1)]'}`}></div>)}
-                            <div draggable onDragStart={(e) => handleWbsDragStart(e, cat.code)} onDragEnd={() => setDraggedCategoryCode(null)} className="cursor-pointer group/wbsrow" onClick={() => setSelectedCategoryCode(prev => prev === cat.code ? '' : cat.code)}>
-                                <div className={`w-full text-left rounded-2xl border transition-all duration-300 flex flex-col relative overflow-visible shadow-sm ${isSelected ? (activeWbsContext === 'safety' ? 'bg-orange-50 border-l-[8px] border-orange-500 shadow-xl scale-[1.02] py-3.5' : 'bg-blue-50 border-l-[8px] border-blue-500 shadow-xl scale-[1.02] py-3.5') : 'bg-slate-50 border-slate-200 hover:bg-white py-1.5'} ${(isDraggingArticle || isDraggingAnalysis) && isTargeted ? 'ring-4 ring-green-500 border-green-600 z-50 shadow-[0_0_20px_rgba(34,197,94,0.4)]' : ''}`} style={{ borderLeftColor: isSelected ? undefined : (cat.color || 'transparent') }}>
-                                    <div className="px-3.5 h-full flex flex-col justify-between">
-                                        <div className="flex flex-row justify-between items-start">
-                                            <div className="flex-1 overflow-hidden"><div className="flex items-center gap-2 mb-0.5"><span className={`text-[8px] font-black font-mono px-1.5 py-0.5 rounded shadow-sm text-white`} style={{ backgroundColor: isSelected ? (activeWbsContext === 'safety' ? '#EA580C' : '#2563EB') : (cat.color || (activeWbsContext === 'safety' ? '#F97316' : '#3B82F6')) }}>{cat.code}</span>{cat.soaCategory && <span className={`text-[7px] font-black uppercase px-1 rounded border ${isSelected ? (activeWbsContext === 'safety' ? 'border-orange-200 bg-orange-100 text-orange-800' : 'border-blue-200 bg-blue-100 text-blue-800') : 'border-slate-200 bg-white text-slate-400'}`}>{cat.soaCategory}</span>}{cat.isLocked && <Lock className="w-2.5 h-2.5 text-red-500" />}</div><span className={`font-black block whitespace-normal uppercase leading-tight transition-all ${isSelected ? (activeWbsContext === 'safety' ? 'text-orange-900 text-[11px]' : 'text-blue-900 text-[11px]') : 'text-slate-600 text-[9px] truncate'}`}>{cat.name}</span></div>
-                                            <div className="flex flex-col items-end gap-1 flex-shrink-0 ml-2"><span className={`font-mono font-black text-[12px] ${isSelected ? (activeWbsContext === 'safety' ? 'text-orange-700' : 'text-blue-700') : 'text-slate-500'}`}>{formatCurrency(categoryTotals[cat.code] || 0)}</span><div className="flex gap-1 opacity-0 group-hover/wbsrow-container:opacity-100 transition-opacity"><button onClick={(e) => { e.stopPropagation(); handleEditCategory(cat); }} className={`p-1.5 bg-white rounded-lg border transition-all ${activeWbsContext === 'safety' ? 'border-orange-200 text-orange-600 hover:bg-orange-500 hover:text-white' : 'border-blue-200 text-blue-600 hover:bg-blue-500 hover:text-white'}`}><Settings className="w-3.3 h-3.3" /></button></div></div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            {isTargeted && wbsDropTarget?.position === 'bottom' && !isDraggingArticle && !isDraggingAnalysis && (<div className={`absolute -bottom-1 left-0 right-0 h-1.5 z-[60] rounded-full animate-pulse ${activeWbsContext === 'safety' ? 'bg-orange-600 shadow-[0_0_15px_rgba(234,88,12,1)]' : 'bg-blue-600 shadow-[0_0_15px_rgba(37,99,235,1)]'}`}></div>)}
-                        </li>
-                        )})}
-                        <li onDragOver={(e) => handleWbsDragOver(e, 'WBS_BOTTOM_TARGET')} onDrop={(e) => handleWbsDrop(e, null)} className={`h-24 transition-all flex flex-col justify-start pt-2 ${wbsDropTarget?.code === 'WBS_BOTTOM_TARGET' ? (activeWbsContext === 'safety' ? 'bg-orange-600/5' : 'bg-blue-600/5') : ''}`}>{wbsDropTarget?.code === 'WBS_BOTTOM_TARGET' && (<div className={`h-1.5 shadow-[0_0_12px_rgba(59,130,246,0.8)] rounded-full animate-pulse mx-4 ${activeWbsContext === 'safety' ? 'bg-orange-600 shadow-orange-600/80' : 'bg-blue-600 shadow-blue-600/80'}`} />)}</li>
-                    </ul>
-                </div>
-                </div>
-            )}
-            <div className={`flex-1 flex flex-col h-full overflow-hidden transition-all duration-500 ${isFocusMode ? 'bg-[#1e293b]' : ''} ${draggedCategoryCode ? 'pointer-events-none select-none opacity-50' : ''}`}>
-               {isFocusMode && (
-                  <div style={{ left: 15, top: 15 }} className="fixed z-[300] flex items-center gap-3 bg-slate-900/90 backdrop-blur-md border border-slate-700 p-2 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] animate-in slide-in-from-top-4 duration-500 group select-none transition-all">
-                    <div onMouseDown={handleToolbarMouseDown} className="p-2 cursor-move text-slate-500 hover:text-blue-400 transition-colors"><GripHorizontal className="w-5 h-5" /></div>
-                    <button onClick={() => handleEditCategory(activeCategory!)} className="p-3 rounded-xl bg-white border border-slate-200 text-blue-700 hover:bg-blue-50 transition-all shadow-lg active:scale-95"><Settings className="w-5 h-5" /></button>
-                    <div className="flex items-center gap-4 pr-3 mr-1 ml-1"><div className="flex flex-col"><span className="text-[12px] font-black text-white/90 uppercase tracking-tighter max-w-[250px] leading-tight mb-1">{activeCategory?.code} - {activeCategory?.name}</span><span className={`text-lg font-black font-mono tracking-tighter leading-none ${viewMode === 'SICUREZZA' ? 'text-orange-400' : 'text-blue-400'}`}>{formatCurrency(categoryTotals[activeCategory?.code || ''] || 0)}</span></div><div className="h-6 w-[1.5px] bg-slate-700"></div><button onClick={() => { setActiveCategoryForAi(activeCategory?.code || null); setIsImportAnalysisModalOpen(true); }} className={`px-4 py-2 rounded-xl font-black uppercase text-[10px] flex items-center gap-2 shadow-lg transition-all active:scale-95 ${viewMode === 'SICUREZZA' ? 'bg-orange-600 hover:bg-orange-500' : 'bg-blue-600 hover:bg-blue-500'} text-white`}><Plus className="w-4 h-4" /> Voce</button></div>
-                    <button onClick={() => setIsFocusMode(false)} className="bg-slate-800 hover:bg-orange-600 text-white p-2.5 rounded-xl transition-all active:scale-90"><Minimize2 className="w-4 h-4" /></button>
-                  </div>
-               )}
-               {returnPath && (<button onClick={handleReturnToArticle} className="fixed bottom-12 right-12 z-[250] flex items-center gap-3 bg-blue-600 hover:bg-blue-700 backdrop-blur-lg border border-blue-50 text-blue-100 px-6 py-4 rounded-[2rem] shadow-2xl animate-in slide-in-from-bottom-8"><ArrowLeft className="w-5 h-5" /><b>Torna alla voce</b></button>)}
-               {viewMode === 'SUMMARY' ? (
-                   <div className="flex-1 overflow-y-auto p-12 bg-white"><Summary totals={totals} info={projectInfo} categories={categories} articles={articles} analyses={analyses} /></div>
-               ) : viewMode === 'CRONOPROGRAMMA' ? (
-                   <div className="flex-1 overflow-hidden"><ScheduleView categories={categories} articles={articles} projectInfo={projectInfo} offsets={scheduleOffsets} teamSizes={teamSizes} onOffsetChange={(id, val) => setScheduleOffsets(prev => ({ ...prev, [id]: val }))} onTeamSizeChange={(id, val) => setTeamSizes(prev => ({ ...prev, [id]: val }))} onReorderCategories={(newCats) => { const result = renumberCategories(newCats, articles); updateState(result.newArticles, result.newCategories); }} /></div>
-               ) : (viewMode === 'COMPUTO' || viewMode === 'SICUREZZA' || viewMode === 'ANALISI') && activeCategory ? (
-                   <>
-                   {viewMode !== 'ANALISI' && !isFocusMode && (
-                       <div className={`flex items-center justify-between p-5 bg-slate-50 rounded-t-3xl border-2 border-b-0 shadow-lg animate-in slide-in-from-top-2 duration-300 transition-all z-[60] ${viewMode === 'SICUREZZA' ? 'border-orange-600' : 'border-blue-700'}`}>
-                            <div className="flex items-center gap-5">
-                                 <div className="flex flex-col items-center"><div className={`px-4 py-3 rounded-2xl font-black text-2xl shadow-inner text-white w-[145px] text-center mb-4 transition-all duration-500 transform hover:scale-105`} style={{ backgroundColor: viewMode === 'SICUREZZA' ? '#EA580C' : (activeCategory.color || '#3B82F6') }}>{activeCategory.code}</div><div className="flex items-center gap-3"><button onClick={() => handleEditCategory(activeCategory)} title="Impostazioni Capitolo" className={`p-2 rounded-xl bg-white border shadow-md transition-all transform active:scale-95 group relative ${viewMode === 'SICUREZZA' ? 'border-orange-200 text-orange-600 hover:bg-orange-50' : 'border-blue-200 text-blue-700 hover:bg-blue-50'}`}><Settings className="w-4 h-4" /><span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[7px] font-black uppercase px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-[9999]">Impostazioni</span></button><button onClick={() => setIsFocusMode(true)} title="Focus Mode" className="p-2 rounded-xl bg-slate-800 text-white hover:bg-blue-600 shadow-md transition-all transform active:scale-95 group relative"><Maximize2 className="w-4 h-4" /><span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-[7px] font-black uppercase px-2 py-1 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap z-[9999]">Full Screen</span></button><button onClick={handleCycleDisplayMode} className={`p-2 rounded-xl border transition-all shadow-md group/cycle relative transform active:scale-95 ${wbsDisplayMode === 0 ? 'bg-white text-slate-400 border-slate-200 hover:border-blue-400' : wbsDisplayMode === 1 ? 'bg-indigo-600 text-white border-indigo-700' : wbsDisplayMode === 2 ? 'bg-blue-800 text-white border-blue-900 animate-pulse' : ''}`}><RefreshCw className={`w-4 h-4 transition-transform duration-700 ${wbsDisplayMode > 0 ? 'rotate-180' : ''}`} /><div className="absolute top-full mt-4 left-1/2 -translate-x-1/2 w-72 bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest p-4 rounded-2xl shadow-2xl opacity-0 group-hover/cycle:opacity-100 pointer-events-none transition-all z-[9999] border border-white/10 ring-1 ring-black flex flex-col gap-2 text-center"><div className={`transition-opacity ${wbsDisplayMode === 0 ? 'text-blue-400' : 'opacity-30'}`}>0 - Tutto Aperto</div><div className={`transition-opacity ${wbsDisplayMode === 1 ? 'text-indigo-400' : 'opacity-30'}`}>1 - Revisione</div><div className={`transition-opacity ${wbsDisplayMode === 2 ? 'text-orange-400' : 'opacity-30'}`}>2 - Patto d'Acciaio</div></div></button></div></div>
-                                 <div className="flex flex-col ml-6"><div className="flex items-center gap-3"><h2 className={`text-2xl font-black uppercase max-w-[500px] whitespace-normal leading-none tracking-tight ${viewMode === 'SICUREZZA' ? 'text-orange-900' : 'text-blue-900'}`}>{activeCategory.name}</h2></div><div className="mt-4 flex items-center gap-4"><span className={`text-3xl font-mono font-black ${viewMode === 'SICUREZZA' ? 'text-orange-600' : 'text-blue-700'}`}>{formatCurrency(categoryTotals[activeCategory.code] || 0)}</span>{activeCategory.soaCategory && (<div className={`border px-4 py-1.5 rounded-full flex items-center gap-2 font-black text-[10px] uppercase shadow-sm ${viewMode === 'SICUREZZA' ? 'bg-orange-100 border-orange-200 text-orange-700' : 'bg-purple-100 border-purple-200 text-purple-700'}`}><Award className="w-3.5 h-3.5" />Categoria SOA: {activeCategory.soaCategory}</div>)}</div></div>
-                            </div>
-                            <div className="flex items-center">
-                              {/* HELP IN LINEA PREZZARI - AGGIORNATO */}
-                               <div className="group/listini relative">
-                                <a href="https://www.gecola.it/home/listini" target="_blank" rel="noopener noreferrer" className={`bg-white border-2 px-8 py-4 rounded-2xl font-black text-xs uppercase flex items-center gap-3 shadow-xl transform transition-all active:scale-95 group/btn ${viewMode === 'SICUREZZA' ? 'border-orange-600 text-orange-600 hover:bg-orange-600 hover:text-white' : 'border-blue-600 text-blue-600 hover:bg-blue-600 hover:text-white'}`}>
-                                  <Database className="w-5 h-5 animate-pulse" />
-                                  Sorgente Prezzi Ufficiali
-                                  <ExternalLink className="w-4 h-4 opacity-50" />
-                                </a>
-                                
-                                <div className="absolute top-full mt-4 right-0 w-80 bg-slate-950 text-white p-6 rounded-[2.5rem] shadow-2xl opacity-0 group-hover/listini:opacity-100 pointer-events-none transition-all z-[9999] border border-white/10 ring-1 ring-black">
-                                    <h4 className={`font-black uppercase text-[10px] tracking-widest mb-4 flex items-center gap-2 ${viewMode === 'SICUREZZA' ? 'text-orange-400' : 'text-blue-400'}`}><Info className="w-4 h-4" /> Supporto Drag & Drop</h4>
-                                    
-                                    <div className="relative h-24 bg-white/5 rounded-2xl mb-4 flex items-center justify-center overflow-hidden border border-white/5">
-                                        <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(#fff 1px, transparent 0)', backgroundSize: '10px 10px' }}></div>
-                                        {/* Animation visualizer */}
-                                        <div className={`w-16 h-10 border-2 border-dashed rounded-lg flex items-center justify-center relative drop-zone-anim ${viewMode === 'SICUREZZA' ? 'border-orange-500/30' : 'border-blue-500/30'}`}>
-                                            <div className="absolute -left-12 top-2 drag-icon-anim">
-                                                <MousePointer2 className="w-6 h-6 text-white drop-shadow-lg" />
-                                                <div className={`w-8 h-4 rounded border border-white/20 -mt-1 ml-2 ${viewMode === 'SICUREZZA' ? 'bg-orange-600/80' : 'bg-blue-600/80'}`}></div>
-                                            </div>
-                                            <CornerRightDown className={`w-4 h-4 opacity-40 ${viewMode === 'SICUREZZA' ? 'text-orange-400' : 'text-blue-400'}`} />
-                                        </div>
-                                    </div>
+        </div>
 
-                                    <div className="space-y-4">
-                                        <p className="text-[10px] leading-relaxed">
-                                            <span className={`font-black ${viewMode === 'SICUREZZA' ? 'text-orange-400' : 'text-blue-400'}`}>PROCEDURA DI AGGANCIO:</span><br/>
-                                            1. Apri il listino su <b>gecola.it</b><br/>
-                                            2. Trascina la voce desiderata tenendo premuto il <span className="text-white font-bold">tasto sinistro</span> del mouse.<br/>
-                                            3. Portala qui sopra e rilascia <span className={`font-bold ${viewMode === 'SICUREZZA' ? 'text-orange-400' : 'text-blue-400'}`}>SOLO quando vedi la luce di aggancio attivo</span>.
-                                        </p>
-                                        <div className={`p-3 rounded-xl border ${viewMode === 'SICUREZZA' ? 'bg-orange-500/10 border-orange-500/20' : 'bg-blue-500/10 border-blue-500/20'}`}>
-                                            <p className={`text-[9px] font-bold ${viewMode === 'SICUREZZA' ? 'text-orange-300' : 'text-blue-300'}`}>GeCoLa Cloud popolerà istantaneamente codice, descrizione, UM e prezzo.</p>
-                                        </div>
-                                    </div>
-                                </div>
-                              </div>
-                            </div>
-                       </div>
-                   )}
-                   {viewMode === 'ANALISI' ? (
-                    <div className="p-10 bg-[#f4f6f8] min-h-full flex-1 overflow-y-auto"><div className="flex justify-between items-end mb-8 border-b-2 border-purple-200 pb-6"><div className="flex items-center gap-6"><div className="bg-purple-600 p-4 rounded-xl shadow-lg ring-4 ring-purple-100"><Database className="w-8 h-8 text-white" /></div><div><h2 className="text-3xl font-black text-slate-800 tracking-tight uppercase italic">Gestionale Analisi Prezzi</h2></div></div><button onClick={() => { setEditingAnalysis(null); setIsAnalysisEditorOpen(true); }} className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-xl font-black uppercase text-xs shadow-xl flex items-center gap-3 transition-all transform active:scale-90"><Plus className="w-5 h-5" /> Nuova Analisi</button></div><div className="bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden ring-1 ring-slate-300/50"><table className="w-full text-left border-collapse table-fixed"><thead className="bg-slate-100 border-b-2 border-purple-100 text-slate-500 text-[10px] font-black uppercase tracking-widest"><tr><th className="p-4 w-12 text-center border-r border-slate-200">#</th><th className="p-4 w-14 text-center border-r border-slate-200">D&D</th><th className="p-4 w-28 border-r border-slate-200">Codice</th><th className="p-4 border-r border-slate-200">Oggetto dell'Analisi</th><th className="p-4 w-24 text-center border-r border-slate-200">U.M.</th><th className="p-4 w-36 text-right border-r border-slate-200">Unitario €</th><th className="p-4 w-52 text-center bg-slate-50">Gestionale</th></tr></thead><tbody className="divide-y divide-slate-100">{analyses.map((analysis, index) => { const isCurrentlyDragging = draggedAnalysisId === analysis.id; const isDragOver = analysisDragOverId === analysis.id; return (<tr key={analysis.id} draggable onDragStart={(e) => handleAnalysisRowDragStart(e, analysis.id)} onDragOver={(e) => handleAnalysisRowDragOver(e, analysis.id)} onDragLeave={() => setAnalysisDragOverId(null)} onDrop={(e) => handleAnalysisRowDrop(e, analysis.id)} onDragEnd={() => { setDraggedAnalysisId(null); setIsDraggingAnalysis(false); }} className={`group transition-all ${isCurrentlyDragging ? 'opacity-30' : 'hover:bg-slate-50/80'} ${isDragOver ? (analysisDropPosition === 'top' ? 'border-t-4 border-t-purple-600' : 'border-b-4 border-b-purple-600') : ''} ${lastMovedItemId === analysis.id ? 'highlight-move' : ''}`}><td className="p-4 text-center font-mono text-[10px] text-slate-400 bg-slate-50/50 border-r border-slate-100">{index + 1}</td><td className="p-4 text-center border-r border-slate-100"><GripVertical className="w-5 h-5 mx-auto text-slate-300 group-hover:text-purple-600 cursor-grab active:cursor-grabbing" /></td><td className="p-4 border-r border-slate-100"><span className="bg-purple-50 text-purple-700 border border-purple-200 font-black font-mono text-xs px-3 py-1 rounded-lg shadow-sm">{analysis.code}</span></td><td className="p-4 border-r border-slate-100"><p className="font-bold text-slate-700 text-xs leading-relaxed line-clamp-2 uppercase tracking-tighter">{analysis.description}</p></td><td className="p-4 text-center border-r border-slate-100"><span className="text-[10px] font-black text-slate-500 uppercase px-2 py-1 bg-slate-100 rounded border border-slate-200">{analysis.unit}</span></td><td className="p-4 text-right border-r border-slate-100"><span className="text-lg font-black text-purple-800 font-mono tracking-tighter leading-none">{formatCurrency(analysis.totalUnitPrice)}</span></td><td className="p-4 text-center bg-slate-50/30"><div className="flex items-center justify-center gap-1.5 px-2"><button onClick={() => handleImportAnalysisToArticle(analysis)} className="bg-emerald-600 text-white p-2 rounded-lg shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2 px-3 transform active:scale-90" title="Importa in Computo"><ArrowRight className="w-3.5 h-3.5" /><span className="text-[9px] font-black uppercase">Importa</span></button><button onClick={() => { setEditingAnalysis(analysis); setIsAnalysisEditorOpen(true); }} className="bg-white border border-slate-200 text-slate-600 hover:text-purple-600 hover:border-purple-300 p-2 rounded-lg shadow-sm transition-all transform active:scale-90" title="Modifica"><PenLine className="w-4 h-4" /></button><button onClick={() => { const newAnalyses = analyses.map(an => an.id === analysis.id ? { ...an, isLocked: !an.isLocked } : an); updateState(articles, categories, newAnalyses); }} className={`p-2 rounded-lg border transition-all transform active:scale-90 ${analysis.isLocked ? 'text-red-600 bg-red-50 border-red-200' : 'text-slate-400 bg-white border-slate-200 hover:text-blue-600'}`}>{analysis.isLocked ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}</button><button onClick={() => handleDeleteAnalysis(analysis.id)} className="bg-white border border-slate-200 text-slate-400 hover:text-red-600 hover:border-red-200 p-2 rounded-lg shadow-sm transition-all transform active:scale-90" title="Elimina"><Trash2 className="w-4 h-4" /></button></div></td></tr>); })}</tbody></table></div></div>
-                   ) : (
-                   <div className={`flex-1 overflow-y-auto overflow-x-hidden shadow-[inset_0_15px_50px_rgba(0,0,0,0.1),inset_0_-15px_50px_rgba(0,0,0,0.1)] border-x border-gray-400 flex flex-col relative scroll-smooth bg-white ${isWorkspaceDragOver ? 'ring-8 ring-blue-400 ring-inset animate-pulse bg-blue-50/50' : ''}`} onKeyDown={handleInputKeyDown} onDragOver={handleWorkspaceDragOver} onDragLeave={() => setIsWorkspaceDragOver(false)} onDrop={handleWorkspaceDrop}>
-    <div className={`flex-1 flex flex-col min-h-full px-6 py-8 relative`}>
-        <table className="w-full text-left border-collapse relative">
-            <TableHeader activeColumn={activeColumn} tariffWidth={projectInfo.tariffColumnWidth} isSafety={viewMode === 'SICUREZZA'} />
-                                {activeArticles.length === 0 ? (
-                                    <tbody><tr><td colSpan={11} className="py-24"><div className={`flex flex-col items-center gap-8 max-w-2xl mx-auto p-12 rounded-[3.5rem] border-4 border-dashed text-center space-y-4 ${viewMode === 'SICUREZZA' ? 'border-orange-100 bg-orange-50/30' : 'border-blue-100 bg-slate-50/30'}`}><div className={`p-8 rounded-[2.5rem] shadow-inner bg-white border ${viewMode === 'SICUREZZA' ? 'text-orange-200 border-orange-50' : 'text-blue-200 border-blue-50'}`}><Zap className="w-16 h-16" /></div><h3 className={`text-3xl font-black uppercase tracking-tighter text-slate-400`}>Capitolo Vuoto</h3></div></td></tr></tbody>
-                                ) : (
-                                    activeArticles.map((article, artIndex) => (
-                                      <ArticleGroup key={article.id} article={article} index={artIndex} globalIndex={globalArticleIndexMap.get(article.id) || 0} allArticles={articles} isPrintMode={false} isCategoryLocked={activeCategory.isLocked} isSurveyorGuardActive={isSurveyorGuardActive} projectSettings={projectInfo} lastMovedItemId={lastMovedItemId} recordingArticleId={recordingArticleId} onUpdateArticle={handleUpdateArticle} onEditArticleDetails={handleEditArticleDetails} onDeleteArticle={handleDeleteArticle} onAddMeasurement={handleAddMeasurement} onAddSubtotal={handleAddSubtotal} onUpdateMeasurement={handleUpdateMeasurement} onDeleteMeasurement={handleDeleteMeasurement} onOpenLinkModal={handleOpenLinkModal} onScrollToArticle={handleScrollToArticle} onArticleDragStart={handleArticleDragStart} onArticleDrop={handleArticleDrop} onArticleDragEnd={onArticleDragEnd} lastAddedMeasurementId={lastAddedMeasurementId} onColumnFocus={setActiveColumn} onViewAnalysis={handleViewLinkedAnalysis} onInsertExternalArticle={handleInsertExternalArticle} onToggleArticleLock={handleToggleArticleLock} onOpenRebarCalculator={handleOpenRebarCalculator} onOpenPaintingCalculator={handleOpenPaintingCalculator} onToggleSmartRepeat={handleToggleSmartRepeat} onToggleItemDisplayMode={handleToggleItemDisplayMode} onStartVoiceDictation={handleStartVoiceDictation} smartRepeatActiveId={smartRepeatActiveId} />
-                                    ))
-                                )}
-                            </table>
-                            <div className="h-[70vh] flex-shrink-0 pointer-events-none" />
-                      </div>
-                   </div>
-                   )}
-                   </>
-               ) : (<div className="p-20 text-center text-gray-400 uppercase font-black opacity-20 text-3xl">Seleziona una sezione</div>)}
+        {categories.map((cat) => (
+          <button
+            key={cat.name}
+            onClick={() => {
+              setSelectedCategory(cat.name);
+              // If clicking "Seleziona", immediately activate the Select tool and show properties
+              if (cat.name === "Seleziona") {
+                setSelectedTool("Select");
+                setShowProperties(true);
+              }
+              if (cat.name === "BIM") {
+                setActiveSidebarTab("bim");
+                setShowProperties(true);
+              }
+            }}
+            className={`px-4 flex flex-col items-center justify-center gap-0.5 ${selectedCategory === cat.name ? "bg-neutral-100" : "hover:bg-neutral-200"}`}
+          >
+            <cat.icon size={16} />
+            <span className="text-[10px]">{cat.name}</span>
+          </button>
+        ))}
+        <button
+          onClick={() => setShowProperties(!showProperties)}
+          className="flex flex-col items-center justify-center px-4 hover:bg-neutral-200 border-l border-neutral-300"
+        >
+          <span className="text-[10px] text-neutral-500">
+            Mode: {defaultLineStyle.mode}
+          </span>
+          <span className="text-xs font-bold">
+            {defaultLineStyle.lineWidth}
+          </span>
+        </button>
+
+        <div className="flex items-center justify-center px-4 gap-3 border-l border-neutral-300 bg-neutral-50/50">
+          <button
+            onClick={() => { handleGuideClick('Annulla'); undo(); }}
+            onMouseEnter={() => handleGuideHover('Annulla')}
+            title="Annulla"
+            className="p-1.5 bg-white rounded shadow-sm border border-neutral-200 hover:bg-neutral-100 hover:text-indigo-600 transition-colors text-neutral-600"
+          >
+            <Undo size={16} />
+          </button>
+          <button
+            onClick={() => { handleGuideClick('Ripristina'); redo(); }}
+            onMouseEnter={() => handleGuideHover('Ripristina')}
+            title="Ripristina"
+            className="p-1.5 bg-white rounded shadow-sm border border-neutral-200 hover:bg-neutral-100 hover:text-indigo-600 transition-colors text-neutral-600"
+          >
+            <Redo size={16} />
+          </button>
+        </div>
+
+        <button
+          onClick={() => {
+            handleGuideClick('Layers');
+            if (activeSidebarTab === 'layers' && showProperties) {
+              setShowProperties(false);
+            } else {
+              setActiveSidebarTab('layers');
+              setShowProperties(true);
+            }
+          }}
+          onMouseEnter={() => handleGuideHover('Layers')}
+          className={`px-4 flex flex-col items-center justify-center gap-0.5 border-l border-neutral-300 ${showProperties && activeSidebarTab === 'layers' ? "bg-indigo-50 text-indigo-700 font-bold" : "hover:bg-neutral-200 text-neutral-600"}`}
+        >
+          <Layers size={16} />
+          <span className="text-[10px]">Layer</span>
+        </button>
+
+        <button
+          onClick={() => {
+            handleGuideClick('Penne');
+            if (activeSidebarTab === 'penne' && showProperties) {
+              // If we are already in the penne tab, but a specific tool help OR entity is selected,
+              // we reset the state to show the default pen settings instead of closing the menu.
+              if (selectedTool === 'Hatch' || selectedTool === 'Specchio' || selectedTool === 'Dimension' || selectedId) {
+                setSelectedTool('Select');
+                setSelectedId(null);
+              } else {
+                setShowProperties(false);
+              }
+            } else {
+              setActiveSidebarTab('penne');
+              setShowProperties(true);
+              // Ensure we don't carry over a tool that might hide the pen settings
+              if (selectedTool === 'Hatch' || selectedTool === 'Specchio' || selectedTool === 'Dimension') {
+                setSelectedTool('Select');
+              }
+            }
+          }}
+          onMouseEnter={() => handleGuideHover('Penne')}
+          className={`px-4 flex flex-col items-center justify-center gap-0.5 border-l border-neutral-300 ${showProperties && activeSidebarTab === 'penne' ? "bg-neutral-100 text-indigo-600 font-bold" : "hover:bg-neutral-200"}`}
+        >
+          <Pen size={16} />
+          <span className="text-[10px]">Penne</span>
+        </button>
+        <button
+          onClick={() => {
+            handleGuideClick('Testo');
+            if (activeSidebarTab === 'testo' && showProperties) {
+              setShowProperties(false);
+            } else {
+              setActiveSidebarTab('testo');
+              setShowProperties(true);
+            }
+          }}
+          onMouseEnter={() => handleGuideHover('Testo')}
+          className={`px-4 flex flex-col items-center justify-center gap-0.5 border-l border-neutral-300 ${showProperties && activeSidebarTab === 'testo' ? "bg-neutral-100 text-indigo-600 font-bold" : "hover:bg-neutral-200"}`}
+        >
+          <Type size={16} />
+          <span className="text-[10px]">Testo</span>
+        </button>
+        <button
+          onClick={() => {
+            handleGuideClick('Gemini AI');
+            if (activeSidebarTab === 'gemini' && showProperties) {
+              setShowProperties(false);
+            } else {
+              setActiveSidebarTab('gemini');
+              setShowProperties(true);
+            }
+          }}
+          onMouseEnter={() => handleGuideHover('Gemini AI')}
+          className={`px-4 flex flex-col items-center justify-center gap-0.5 border-l border-neutral-300 ${showProperties && activeSidebarTab === 'gemini' ? "bg-amber-50 text-amber-700 font-bold border-x border-amber-200" : "hover:bg-neutral-200 text-neutral-600"}`}
+        >
+          <Sparkles size={16} className={showProperties && activeSidebarTab === 'gemini' ? "text-amber-500 animate-pulse" : "text-amber-500"} />
+          <span className="text-[10px]">Gemini AI</span>
+        </button>
+        {isBIMModeEnabled && (
+        <button
+          onClick={() => {
+            handleGuideClick('BIM');
+            if (activeSidebarTab === 'bim' && showProperties) {
+              setShowProperties(false);
+            } else {
+              setActiveSidebarTab('bim');
+              setSelectedCategory('BIM');
+              setShowProperties(true);
+            }
+          }}
+          onMouseEnter={() => handleGuideHover('BIM')}
+          className={`px-4 flex flex-col items-center justify-center gap-0.5 border-l border-neutral-300 ${showProperties && activeSidebarTab === 'bim' ? "bg-cyan-50 text-cyan-800 font-bold border-x border-cyan-200" : "hover:bg-neutral-200 text-neutral-600"}`}
+        >
+          <Building size={16} className={showProperties && activeSidebarTab === 'bim' ? "text-cyan-600 animate-pulse" : "text-cyan-600"} />
+          <span className="text-[10px] font-bold">BIM</span>
+        </button>
+        )}
+        <div className="flex-1"></div>
+        <button
+          onClick={() => {
+            if (activeSidebarTab === 'manuale' && showProperties) {
+              setShowProperties(false);
+              setShowFloatingManual(false);
+            } else {
+              setActiveSidebarTab('manuale');
+              setShowProperties(true);
+              setShowFloatingManual(true);
+            }
+          }}
+          className={`px-5 py-1.5 flex flex-col items-center justify-center gap-0.5 border-l border-neutral-300 relative select-none h-full min-w-[76px] ${showProperties && activeSidebarTab === 'manuale' ? "bg-emerald-50 text-emerald-950 font-bold border-x border-emerald-200" : "hover:bg-neutral-200 text-neutral-600"}`}
+        >
+          {/* Spuntatura interattiva in alto a destra */}
+          <div 
+            className="absolute top-1 right-1 flex items-center justify-center z-20 p-0.5 rounded cursor-pointer hover:bg-neutral-300/40"
+            onClick={(e) => {
+              e.stopPropagation(); // Evita l'apertura del pannello laterale quando si clicca solo la spunta
+              setShowFloatingManual(!showFloatingManual);
+            }}
+            title={showFloatingManual ? "Help in linea ATTIVO - Ogni volta che tocchi uno strumento avrai la guida rapida pop-up (Clicca la spunta per disattivare)" : "Help in linea DISATTIVATO - Le spiegazioni automatiche non si apriranno in pop-up per non appesantire (Clicca la spunta per attivare)"}
+          >
+            <input
+              type="checkbox"
+              checked={showFloatingManual}
+              onChange={() => {}} // Gestito interamente da onClick per compatibilità stopPropagation
+              className="w-3 h-3 cursor-pointer accent-emerald-600 border border-neutral-300 rounded transition-all focus:ring-0"
+            />
+          </div>
+
+          <BookOpen size={16} className={showProperties && activeSidebarTab === 'manuale' ? "text-emerald-600 animate-pulse" : "text-neutral-500"} />
+          <span className="text-[10px] font-bold">Manuale</span>
+        </button>
+
+        <div className="flex items-center gap-1.5 px-2 border-l border-neutral-300 bg-neutral-50 h-full">
+           <button onClick={() => { handleGuideClick('Apri'); handleOpenFile(); }} onMouseEnter={() => handleGuideHover('Apri')} title="Apri File" className="flex flex-col items-center justify-center p-1.5 hover:bg-neutral-200 text-neutral-600 rounded gap-0.5">
+             <FolderOpen size={16} />
+             <span className="text-[10px]">Apri</span>
+           </button>
+           <button onClick={() => { handleGuideClick('Salva'); handleSaveAsFile(); }} onMouseEnter={() => handleGuideHover('Salva')} title={fileHandle ? "Salva con nome" : "Salva"} className="flex flex-col items-center justify-center p-1.5 hover:bg-neutral-200 text-neutral-600 rounded gap-0.5">
+             <Save size={16} />
+             <span className="text-[10px]">Salva</span>
+           </button>
+           <button onClick={() => { handleGuideClick('Importa'); importInputRef.current?.click(); }} onMouseEnter={() => handleGuideHover('Importa')} title="Importa file .dxf o .dwg" className="flex flex-col items-center justify-center p-1.5 hover:bg-emerald-100 text-emerald-600 hover:text-emerald-700 rounded gap-0.5 border-l border-neutral-200 pl-2 transition-colors">
+             <FileUp size={16} />
+             <span className="text-[10px] font-bold">Importa</span>
+           </button>
+           <button onClick={() => { handleGuideClick('Lettore DXF'); setIsDXFTextReaderOpen(true); }} onMouseEnter={() => handleGuideHover('Lettore DXF')} title="Genera disegno da testo/codice DXF" className="flex flex-col items-center justify-center p-1.5 hover:bg-teal-50 text-teal-600 hover:text-teal-700 rounded gap-0.5 border-l border-neutral-200 pl-2 transition-colors">
+             <Code size={16} />
+             <span className="text-[10px] font-bold">Lettore DXF</span>
+           </button>
+        </div>
+        <button
+          onClick={() => {
+            handleGuideClick('Tavole CAD');
+            if (activeSidebarTab === 'tavole' && showProperties) {
+              setShowProperties(false);
+            } else {
+              setActiveSidebarTab('tavole');
+              setShowProperties(true);
+            }
+          }}
+          onMouseEnter={() => handleGuideHover('Tavole CAD')}
+          className={`px-4 flex flex-col items-center justify-center gap-0.5 ${showProperties && activeSidebarTab === 'tavole' ? "bg-indigo-50 border-x border-indigo-200" : "hover:bg-neutral-200 border-l border-neutral-300"}`}
+        >
+          <Layers size={16} className={`${activeSidebarTab === 'tavole' && showProperties ? "text-indigo-600 animate-pulse" : "text-neutral-500"}`} />
+          <span className={`text-[10px] font-bold ${activeSidebarTab === 'tavole' && showProperties ? "text-indigo-700" : "text-neutral-600"}`}>Tavole CAD</span>
+        </button>
+        <button
+          onClick={async () => {
+            handleGuideClick('Salva');
+            const { exportDXF } = await import("./utils/dxfExport");
+            exportDXF(entities, layers, "disegno.dxf");
+          }}
+          onMouseEnter={() => handleGuideHover('Salva')}
+          className="px-4 flex flex-col items-center justify-center gap-0.5 hover:bg-neutral-200 text-blue-600 border-l border-neutral-300"
+        >
+          <span className="font-bold text-sm">DXF</span>
+          <span className="text-[10px] font-bold">Salva CAD</span>
+        </button>
+      </header>
+      <div className="h-8 bg-white border-b border-neutral-300 flex items-center px-4 gap-2">
+        {selectedCategory === "BIM" ? (
+          <BIMTopBarControls
+            selectedTool={selectedTool}
+            setSelectedTool={setSelectedTool}
+            selectedTemplateId={selectedTemplateId}
+            setSelectedTemplateId={setSelectedTemplateId}
+            selectedBIMSymbolType={selectedBIMSymbolType}
+            setSelectedBIMSymbolType={setSelectedBIMSymbolType}
+            cadCanvasRef={cadCanvasRef}
+            defaultHatchStyle={defaultHatchStyle}
+            setDefaultHatchStyle={setDefaultHatchStyle}
+            bimWallThickness={bimWallThickness}
+            setBimWallThickness={setBimWallThickness}
+            bimWallHeight={bimWallHeight}
+            setBimWallHeight={setBimWallHeight}
+            bimDoorWidth={bimDoorWidth}
+            setBimDoorWidth={setBimDoorWidth}
+            bimDoorHeight={bimDoorHeight}
+            setBimDoorHeight={setBimDoorHeight}
+            bimWindowWidth={bimWindowWidth}
+            setBimWindowWidth={setBimWindowWidth}
+            bimWindowHeight={bimWindowHeight}
+            setBimWindowHeight={setBimWindowHeight}
+            bimSymbolScale={bimSymbolScale}
+            setBimSymbolScale={(val) => {
+              setBimSymbolScale(val);
+              localStorage.setItem('lastBIMSymbolScale', val.toString());
+            }}
+            setIsBIMFinestreOpen={setIsBIMFinestreOpen}
+          />
+        ) : (
+          selectedCategoryTools.map((tool) => (
+            <button
+              key={tool.name}
+              draggable={true}
+              onDragStart={(e) => {
+                e.dataTransfer.setData("text/plain", tool.name);
+                e.dataTransfer.setData("source", "toolbar");
+              }}
+              onMouseEnter={() => handleGuideHover(tool.name)}
+              onClick={() => handleToolClick(tool.name)}
+              className={`px-2 py-0.5 rounded flex items-center gap-1 text-xs cursor-grab active:cursor-grabbing border border-transparent transition-all hover:border-neutral-300 ${
+                selectedTool === tool.name 
+                  ? "bg-indigo-100 text-indigo-900 border border-indigo-300 font-bold shadow-xs" 
+                  : "hover:bg-neutral-200"
+              }`}
+              title="Trascina e rilascia nel foglio per creare un menu speciale preferiti!"
+            >
+              <tool.icon size={12} />
+              {tool.name}
+            </button>
+          ))
+        )}
+        {selectedCategory === "Seleziona" && (
+          <>
+            <div className="h-4 w-[1px] bg-neutral-300 mx-1" />
+            <span className="text-[11px] text-neutral-500 font-medium">
+              Menu Righelli:
+            </span>
+            <button
+              onClick={() => {
+                handleGuideClick("Classico (Tecnigrafo)");
+                setRulerStyle("tecnigrafo");
+              }}
+              onMouseEnter={() => handleGuideHover("Classico (Tecnigrafo)")}
+              className={`px-2 py-0.5 rounded flex items-center gap-1 text-xs transition ${rulerStyle === "tecnigrafo" ? "bg-amber-100 text-amber-950 border border-amber-300 font-medium" : "hover:bg-neutral-200"}`}
+            >
+              <DraftingCompass size={12} />
+              Classico (Tecnigrafo)
+            </button>
+            <button
+              onClick={() => {
+                handleGuideClick("Incrocio CAD");
+                setRulerStyle("crosshair");
+              }}
+              onMouseEnter={() => handleGuideHover("Incrocio CAD")}
+              className={`px-2 py-0.5 rounded flex items-center gap-1 text-xs transition ${rulerStyle === "crosshair" ? "bg-amber-100 text-amber-950 border border-amber-300 font-medium" : "hover:bg-neutral-200"}`}
+            >
+              <Crosshair size={12} />
+              Incrocio CAD
+            </button>
+            <div className="h-4 w-[1px] bg-neutral-300 mx-1" />
+            <span className="text-[11px] text-neutral-500 font-medium">
+              Clipboard (Appunti):
+            </span>
+            <button
+              onClick={async () => {
+                if (selectedId) {
+                  const selectedEnt = entities.find(el => el.id === selectedId);
+                  if (selectedEnt) {
+                    try {
+                      const data = {
+                        source: "gecolacad",
+                        entities: [selectedEnt]
+                      };
+                      await navigator.clipboard.writeText(JSON.stringify(data));
+                      setShortcutToast("Oggetto CAD copiato negli appunti!");
+                      setTimeout(() => setShortcutToast(null), 3000);
+                    } catch (err) {
+                      setShortcutToast("Impossibile copiare. Usa Ctrl+C sul foglio!");
+                      setTimeout(() => setShortcutToast(null), 3000);
+                    }
+                  }
+                } else {
+                  setShortcutToast("Seleziona prima un oggetto da copiare!");
+                  setTimeout(() => setShortcutToast(null), 3000);
+                }
+              }}
+              className="px-2 py-0.5 rounded flex items-center gap-1 text-xs transition bg-neutral-50 hover:bg-neutral-100 border border-neutral-200 text-neutral-800"
+              title="Copia l'oggetto CAD selezionato negli appunti (Ctrl+C)"
+            >
+              <Copy size={12} />
+              Copia Oggetto
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const text = await navigator.clipboard.readText();
+                  if (text) {
+                    const pasteEvent = new ClipboardEvent('paste', {
+                      clipboardData: new DataTransfer()
+                    });
+                    pasteEvent.clipboardData?.setData('text', text);
+                    window.dispatchEvent(pasteEvent);
+                  } else {
+                    setShortcutToast("Gli appunti sono vuoti!");
+                    setTimeout(() => setShortcutToast(null), 3000);
+                  }
+                } catch (err) {
+                  setShortcutToast("Premi Ctrl+V sul foglio per incollare testi, immagini o oggetti!");
+                  setTimeout(() => setShortcutToast(null), 4000);
+                }
+              }}
+              className="px-2 py-0.5 rounded flex items-center gap-1 text-xs transition bg-neutral-50 hover:bg-neutral-100 border border-neutral-200 text-neutral-800"
+              title="Incolla testi, immagini o oggetti CAD dagli appunti (Ctrl+V)"
+            >
+              <Clipboard size={12} />
+              Incolla (Ctrl+V)
+            </button>
+          </>
+        )}
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => {
+              handleGuideClick("Modo Orto");
+              setOrthoMode(!orthoMode);
+            }}
+            onMouseEnter={() => handleGuideHover("Modo Orto")}
+            className={`px-2 py-0.5 rounded flex items-center gap-1 text-xs transition ${
+              orthoMode 
+                ? "bg-indigo-100 text-indigo-900 border border-indigo-300" 
+                : "hover:bg-neutral-200"
+            }`}
+          >
+            <OrthoIcon size={12} />
+            <span>Ortho</span>
+          </button>
+          <button
+            onClick={() => {
+              const next = !isTecnigrafoActive;
+              setIsTecnigrafoActive(next);
+              if (next) {
+                const event = new KeyboardEvent('keydown', { key: 'q', bubbles: true });
+                document.dispatchEvent(event);
+              } else {
+                const event = new KeyboardEvent('keyup', { key: 'q', bubbles: true });
+                document.dispatchEvent(event);
+              }
+            }}
+            className={`px-2 py-0.5 rounded flex items-center gap-1 text-xs transition ${
+              isTecnigrafoActive 
+                ? "bg-amber-100 text-amber-900 border border-amber-300" 
+                : "hover:bg-neutral-200"
+            }`}
+          >
+            <DraftingCompass size={12} />
+            <span>Tecnigrafo</span>
+          </button>
+          
+          <button
+            onClick={() => {
+              const next = !isContinuousMode;
+              setIsContinuousMode(next);
+              if (next && selectedTool === 'Select') {
+                setOrthoMode(true);
+                setSelectedTool('Line');
+              }
+              setCancelTrigger(prev => prev + 1);
+            }}
+            className={`px-2 py-0.5 rounded flex items-center gap-1 text-xs transition-all ${
+              isContinuousMode 
+                ? "bg-amber-100 text-amber-950 border border-amber-300 font-bold shadow-[0_0_8px_rgba(245,158,11,0.2)]" 
+                : "hover:bg-neutral-200"
+            }`}
+          >
+            <PenTool size={12} className={isContinuousMode ? "text-amber-600" : ""} />
+            <span>Polilinea</span>
+          </button>
+          <div className="flex gap-1 rounded bg-neutral-200 p-0.5">
+            <button
+              onClick={() => {
+                handleGuideClick("Penne");
+                setDefaultLineStyle({ mode: 'CAD', color: '#000000', lineWidth: 1, dashed: false });
+                setActiveSidebarTab('penne');
+                setShowProperties(true);
+                handleToolClick("Line");
+              }}
+              onMouseEnter={() => handleGuideHover("Penne")}
+              className={`px-3 py-1 rounded text-[10px] font-bold ${defaultLineStyle.mode === 'CAD' ? 'bg-white shadow-sm font-extrabold text-neutral-900' : 'text-neutral-500 hover:text-neutral-700'}`}
+            >
+              CAD
+            </button>
+            <div className="flex items-center gap-1 border-l border-neutral-300 pl-2 ml-1">
+              <span className="text-[9px] font-bold text-neutral-400 mr-1">Kina:</span>
+              {[0.25, 0.5, 1, 2].map(w => (
+                <button
+                  key={w}
+                  onClick={() => {
+                    handleGuideClick("Penne");
+                    setDefaultLineStyle({ mode: 'ink', color: '#000000', lineWidth: w, dashed: false });
+                    setActiveSidebarTab('penne');
+                    setShowProperties(true);
+                    handleToolClick("Line");
+                  }}
+                  className={`w-7 h-6 rounded flex items-center justify-center text-[9px] font-black transition-all ${defaultLineStyle.mode === 'ink' && defaultLineStyle.lineWidth === w ? 'bg-indigo-600 text-white shadow-md scale-110' : 'bg-neutral-200 text-neutral-600 hover:bg-neutral-300'}`}
+                >
+                  {w}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1 border-l border-neutral-300 pl-2 ml-1">
+              <span className="text-[9px] font-bold text-neutral-400 mr-1">Matita:</span>
+              {['2H', 'HB', '2B'].map(m => (
+                <button
+                  key={m}
+                  onClick={() => {
+                    handleGuideClick("Penne");
+                    const color = m === '2H' ? '#bbbbbb' : (m === 'HB' ? '#444444' : '#111111');
+                    const width = m === '2H' ? 1 : (m === 'HB' ? 2 : 3);
+                    setDefaultLineStyle({ mode: 'pencil', color, lineWidth: width, dashed: false });
+                    setActiveSidebarTab('penne');
+                    setShowProperties(true);
+                    handleToolClick("Line");
+                  }}
+                  className={`px-1.5 h-6 rounded flex items-center justify-center text-[9px] font-black transition-all ${defaultLineStyle.mode === 'pencil' && (m === '2H' ? defaultLineStyle.color === '#bbbbbb' : (m === 'HB' ? defaultLineStyle.color === '#444444' : defaultLineStyle.color === '#111111')) ? 'bg-amber-500 text-white shadow-md scale-110' : 'bg-neutral-200 text-neutral-600 hover:bg-neutral-300'}`}
+                >
+                  {m}
+                </button>
+              ))}
             </div>
           </div>
-          <ProjectAnalystModal isOpen={isAnalystModalOpen} onClose={() => setIsAnalystModalOpen(false)} articles={articles} />
-          <ProjectSettingsModal isOpen={isSettingsModalOpen} onClose={() => setIsSettingsModalOpen(false)} info={projectInfo} onSave={(newInfo) => setProjectInfo(newInfo)} />
-          {editingArticle && <ArticleEditModal isOpen={isEditArticleModalOpen} onClose={() => { setIsEditArticleModalOpen(false); setEditingArticle(null); }} article={editingArticle} onSave={handleArticleEditSave} onConvertToAnalysis={handleConvertArticleToAnalysis} />}
-          {linkTarget && <LinkArticleModal isOpen={isLinkModalOpen} onClose={() => { setIsLinkModalOpen(false); setLinkTarget(null); }} articles={articles} currentArticleId={linkTarget.articleId} onLink={handleLinkMeasurement} />}
-          <CategoryEditModal isOpen={isCategoryModalOpen} onClose={() => setIsCategoryModalOpen(false)} onSave={handleSaveCategory} onDelete={handleDeleteCategory} onToggleLock={handleToggleCategoryLock} onToggleEnabled={handleToggleCategoryVisibility} onDuplicate={(code) => { setWbsOptionsContext({ type: 'clone', sourceCode: code, initialName: categories.find(c => c.code === code)?.name || '' }); }} initialData={editingCategory} nextWbsCode={generateNextWbsCode(categories)} forcedIsSuper={creatingForcedIsSuper} />
-          <SaveProjectModal isOpen={isSaveModalOpen} onClose={() => setIsSaveModalOpen(false)} articles={articles} categories={categories} projectInfo={projectInfo} />
-          <AnalysisEditorModal isOpen={isAnalysisEditorOpen} onClose={() => setIsAnalysisEditorOpen(false)} analysis={editingAnalysis} onSave={handleSaveAnalysis} nextCode={`AP.${(analyses.length + 1).toString().padStart(2, '0')}`} />
-          {wbsOptionsContext && <WbsImportOptionsModal isOpen={!!wbsOptionsContext} onClose={() => setWbsOptionsContext(null)} onChoice={handleWbsActionChoice} initialName={wbsOptionsContext?.initialName || ''} isImport={wbsOptionsContext?.type === 'import'} />}
-          <ImportAnalysisModal isOpen={isImportAnalysisModalOpen} onClose={() => setIsImportAnalysisModalOpen(false)} analyses={analyses} onImport={handleImportAnalysisToArticle} onCreateNew={() => { setIsImportAnalysisModalOpen(false); handleAddEmptyArticle(activeCategoryForAi || selectedCategoryCode); }} />
-          <BulkGeneratorModal isOpen={isBulkModalOpen} onClose={() => setIsBulkModalOpen(false)} onGenerate={handleBulkGenerateLocal} isLoading={isGenerating} region={projectInfo.region} year={projectInfo.year} />
-          <HelpManualModal isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
-          <RebarCalculatorModal isOpen={isRebarModalOpen} onClose={() => setIsRebarModalOpen(false)} onAdd={handleAddRebarMeasurement} />
-          <PaintingCalculatorModal isOpen={isPaintingModalOpen} onClose={() => setIsPaintingModalOpen(false)} onAdd={handleAddPaintingMeasurements} />
-        </>
+        </div>
+      </div>
+
+      {/* Main Area */}
+      <div className="flex flex-1 overflow-hidden relative">
+        <main
+          className="flex-1 overflow-hidden relative"
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "copy";
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const toolName = e.dataTransfer.getData("text/plain");
+            const source = e.dataTransfer.getData("source");
+            
+            const rect = e.currentTarget.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (toolName) {
+              let isDocked: 'left' | 'right' | null = null;
+              let finalX = x;
+
+              if (x < 50) {
+                isDocked = 'left';
+                finalX = 0;
+              } else if (window.innerWidth - e.clientX < 240) {
+                isDocked = 'right';
+                finalX = window.innerWidth - 60;
+              }
+
+              const newPanelId = `fav-${Date.now()}`;
+              const newPanel = {
+                id: newPanelId,
+                tools: [toolName],
+                x: isDocked === 'left' ? 0 : (isDocked === 'right' ? window.innerWidth - 65 : Math.max(10, x - 24)),
+                y: Math.max(50, y - 24),
+                isDocked
+              };
+
+              if (source && source.startsWith("favorites-")) {
+                const sourcePanelId = source.replace("favorites-", "");
+                setFavoritePanels(prev => {
+                  const filtered = prev.map(p => {
+                    if (p.id === sourcePanelId) {
+                      return { ...p, tools: p.tools.filter(t => t !== toolName) };
+                    }
+                    return p;
+                  }).filter(p => p.tools.length > 0);
+                  return [...filtered, newPanel];
+                });
+              } else if (source === "toolbar") {
+                setFavoritePanels(prev => [...prev, newPanel]);
+              }
+            }
+          }}
+        >
+          <CADCanvas
+            ref={cadCanvasRef}
+            entities={entities}
+            activeTool={selectedTool}
+            setActiveTool={setSelectedTool}
+            setEntities={updateEntitiesWithHistory}
+            setEntitiesSilent={updateEntitiesSilent}
+            defaultTextStyle={defaultTextStyle}
+            onCommitHistory={commitToHistory}
+            onSelect={(id, entity) => {
+              setSelectedId(id);
+              if (id) {
+                setShowProperties(true);
+                const ent = entity || entities.find(e => e.id === id);
+                if (ent && ent.type === 'text') {
+                  setActiveSidebarTab('testo');
+                } else if (ent && ent.isBIM) {
+                  setActiveSidebarTab('bim');
+                } else {
+                  setActiveSidebarTab('penne');
+                }
+              }
+            }}
+            onContextMenu={handleRightClickShortcut}
+            activeLayerId={activeLayerId}
+            layers={layers}
+            defaultLineStyle={defaultLineStyle}
+            setDefaultLineStyle={setDefaultLineStyle}
+            eraserRadius={eraserRadius}
+            setEraserRadius={setEraserRadius}
+            eraserType={eraserType}
+            setEraserType={setEraserType}
+            rulerStyle={rulerStyle}
+            orthoMode={orthoMode}
+            setOrthoMode={setOrthoMode}
+            isContinuousMode={isContinuousMode}
+            isBIMModeEnabled={isBIMModeEnabled}
+            cancelTrigger={cancelTrigger}
+            parallelTrigger={parallelTrigger}
+            tavole={tavole}
+            onUpdateTavole={setTavole}
+            onDoubleClickTavola={setDoubleClickedTavolaId}
+            selectedTemplateId={selectedTemplateId}
+            selectedEntityId={selectedId}
+            selectedBIMSymbolType={selectedBIMSymbolType}
+            setSelectedBIMSymbolType={setSelectedBIMSymbolType}
+            bimSymbolScale={bimSymbolScale}
+            defaultHatchStyle={defaultHatchStyle}
+            bimWallHeight={bimWallHeight}
+            bimDoorHeight={bimDoorHeight}
+            bimWindowHeight={bimWindowHeight}
+            bimWallThickness={bimWallThickness}
+            bimWallType={bimWallType}
+            onActionStart={() => {
+              setHoveredGuide(null);
+              setGuideLockedBy(null);
+            }}
+            raccordoConfig={raccordoConfig}
+            onEditRaccordo={(raccordoEntity) => {
+              setEditingRaccordo(raccordoEntity);
+              setIsRaccordoDialogOpen(true);
+            }}
+            onAreaDetected={handleAreaDetected}
+            highlightedPoints={detectedAreaPoints}
+          />
+
+          <AreaFunzionaleDialog
+            isOpen={isBIMAreaDialogOpen}
+            onClose={() => {
+              setIsBIMAreaDialogOpen(false);
+              setDetectedAreaPoints(null);
+              setEditingAreaId(null);
+            }}
+            onConfirm={handleConfirmArea}
+            points={detectedAreaPoints || undefined}
+            initialData={editingAreaId ? (() => {
+              const e = entities.find(ent => ent.id === editingAreaId);
+              if (!e) return undefined;
+              return {
+                type: (e as any).bimAreaType || 'stanza',
+                name: (e as any).bimName || '',
+                color: (e as any).backgroundColor || e.color,
+                height: (e as any).height || 2.70,
+                hatch: (e as any).bimHatchPattern || 'SOLID'
+              };
+            })() : undefined}
+          />
+          <FinestreDialog
+            isOpen={isBIMFinestreOpen}
+            onClose={() => setIsBIMFinestreOpen(false)}
+            lastWindowWidth={bimWindowWidth}
+            lastWindowHeight={bimWindowHeight}
+            onConfirmWindow={(width, height, type, trasmittanza, prezzario) => {
+              setBimWindowWidth(width);
+              setBimWindowHeight(height);
+              setIsBIMFinestreOpen(false);
+              setSelectedBIMSymbolType('window');
+              setShortcutToast("Seleziona un punto sul muro per inserire la finestra");
+            }}
+          />
+
+          {is3DViewOpen && (
+            <BIM3DViewer 
+              entities={entities} 
+              onClose={() => setIs3DViewOpen(false)} 
+            />
+          )}
+          
+          {doubleClickedTavolaId && !pdfPreviewUrl && (
+            <div className="absolute inset-0 bg-black/20 flex items-center justify-center p-4 z-50 pointer-events-auto">
+              <div className="bg-white rounded-lg shadow-xl w-full max-w-sm overflow-hidden flex flex-col">
+                {(() => {
+                  const tav = tavole.find(t => t.id === doubleClickedTavolaId);
+                  if (!tav) return null;
+                  return (
+                    <>
+                      <div className="px-4 border-b border-neutral-100 flex items-center justify-between py-3">
+                        <h3 className="font-bold text-neutral-800 text-sm">Parametri Tavola - {tav.name}</h3>
+                        <button onClick={() => setDoubleClickedTavolaId(null)} className="text-neutral-400 hover:text-neutral-600">✕</button>
+                      </div>
+                      <div className="p-4 space-y-4">
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <label className="block text-[10px] text-neutral-500 font-bold uppercase tracking-wider mb-1">Foglio</label>
+                            <select
+                              value={tav.format}
+                              onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? { ...t, format: e.target.value as any } : t))}
+                              className="w-full bg-neutral-50 border border-neutral-300 text-sm rounded p-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                            >
+                              <option value="A4">A4</option>
+                              <option value="A3">A3</option>
+                              <option value="A2">A2</option>
+                              <option value="A1">A1</option>
+                              <option value="A0">A0</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-neutral-500 font-bold uppercase tracking-wider mb-1">Scala 1:</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={tav.scale}
+                              onChange={(e) => {
+                                const val = Math.max(1, Number(e.target.value));
+                                setTavole(tavole.map(t => t.id === tav.id ? { ...t, scale: val } : t));
+                              }}
+                              className="w-full bg-neutral-50 border border-neutral-300 text-sm rounded p-1.5 text-center font-bold focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-neutral-500 font-bold uppercase tracking-wider mb-1">Unità</label>
+                            <select
+                              value={tav.unit}
+                              onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? { ...t, unit: e.target.value as any } : t))}
+                              className="w-full bg-neutral-50 border border-neutral-300 text-sm rounded p-1.5 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                            >
+                              <option value="m">Metri</option>
+                              <option value="cm">Cm</option>
+                              <option value="mm">Mm</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 mt-4 pt-4 border-t border-neutral-100">
+                          <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider mb-2">Cartiglio</h4>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-semibold text-neutral-600">Progetto</label>
+                            <input 
+                              type="text"
+                              className="border border-neutral-300 rounded p-1.5 text-sm w-full bg-neutral-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                              value={tav.datiCartiglio.progetto}
+                              onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, datiCartiglio: {...t.datiCartiglio, progetto: e.target.value}} : t))}
+                            />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-semibold text-neutral-600">Titolo</label>
+                            <input 
+                              type="text"
+                              className="border border-neutral-300 rounded p-1.5 text-sm w-full bg-neutral-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                              value={tav.datiCartiglio.titolo}
+                              onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, datiCartiglio: {...t.datiCartiglio, titolo: e.target.value}} : t))}
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <div className="flex flex-col gap-1 flex-1">
+                              <label className="text-[10px] font-semibold text-neutral-600">Autore</label>
+                              <input 
+                                type="text"
+                                className="border border-neutral-300 rounded p-1.5 text-sm w-full bg-neutral-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                                value={tav.datiCartiglio.autore}
+                                onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, datiCartiglio: {...t.datiCartiglio, autore: e.target.value}} : t))}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-1 w-1/3">
+                              <label className="text-[10px] font-semibold text-neutral-600">Data</label>
+                              <input 
+                                type="text"
+                                className="border border-neutral-300 rounded p-1.5 text-sm w-full bg-neutral-50 focus:bg-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                                value={tav.datiCartiglio.data}
+                                onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, datiCartiglio: {...t.datiCartiglio, data: e.target.value}} : t))}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2 mt-4 pt-4 border-t border-neutral-100 bg-red-50/30 p-2 rounded">
+                          <h4 className="text-[10px] font-bold text-red-600 uppercase tracking-wider mb-2 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                            Calibrazione Righello (Stampante)
+                          </h4>
+                          <p className="text-[10px] text-neutral-500 leading-tight">
+                            Se stampando al 100% la "verifica 10mm" sul foglio misura diversamente (es. 9mm), inserisci qui la misura esatta letta col righello. Il CAD compenserà l'errore della stampante.
+                          </p>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-semibold text-neutral-600">Misura reale linea di verifica (in mm)</label>
+                            <input 
+                              type="number"
+                              step="0.1"
+                              placeholder="10"
+                              className="border border-neutral-300 rounded p-1.5 text-sm w-full bg-neutral-50 focus:bg-white focus:ring-1 focus:ring-red-500 focus:border-red-500 outline-none transition-all font-mono"
+                              value={tav.measuredCalibrationMm || 10}
+                              onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, measuredCalibrationMm: parseFloat(e.target.value) || 10} : t))}
+                            />
+                          </div>
+                        </div>
+
+                      </div>
+                      <div className="p-4 border-t border-neutral-100 bg-neutral-50 flex justify-end gap-2">
+                        <button
+                          onClick={async () => {
+                            const { exportNativePDF } = await import("./utils/pdfExport");
+                            const url = exportNativePDF(entities, tav.format, tav.scale, tav.unit, tav, 'bloburl');
+                            if (url) {
+                              setPdfPreviewUrl(url);
+                              setActivePreviewTavolaId(tav.id);
+                            }
+                          }}
+                          className="px-4 py-2 bg-indigo-100 text-indigo-700 hover:text-indigo-800 rounded text-sm font-bold shadow-sm hover:bg-indigo-200 transition-colors flex items-center justify-center gap-1"
+                        >
+                          Anteprima di Stampa
+                        </button>
+                        <button
+                          onClick={() => setDoubleClickedTavolaId(null)}
+                          className="px-4 py-2 bg-indigo-600 text-white rounded text-sm font-bold shadow-sm hover:bg-indigo-700 transition-colors"
+                        >
+                          Chiudi
+                        </button>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {pdfPreviewUrl && (
+            <div className="absolute inset-0 bg-black/60 flex items-center justify-center p-6 z-[60] pointer-events-auto">
+              <div className="bg-white rounded-lg shadow-2xl w-full h-full max-w-5xl flex flex-col overflow-hidden">
+                <div className="px-4 py-3 border-b flex items-center justify-between bg-neutral-50 shrink-0 border-neutral-200">
+                  <h3 className="font-bold text-neutral-800 flex items-center gap-2">
+                    <Printer size={18} className="text-indigo-600" />
+                    Anteprima di Stampa PDF
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <a 
+                      href={pdfPreviewUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer" 
+                      className="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded font-bold text-sm transition-colors flex items-center gap-1.5 shadow-sm"
+                    >
+                      <ExternalLink size={14} />
+                      Apri / Stampa a pagina intera
+                    </a>
+                    <button 
+                      onClick={() => {
+                        const a = document.createElement("a");
+                        a.href = pdfPreviewUrl;
+                        a.download = "anteprima.pdf";
+                        a.click();
+                      }}
+                      className="px-3 py-1.5 bg-neutral-200 hover:bg-neutral-300 text-neutral-800 rounded font-bold text-sm transition-colors"
+                    >
+                      Scarica File
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setPdfPreviewUrl(null);
+                        setActivePreviewTavolaId(null);
+                      }} 
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded font-bold text-sm transition-colors"
+                    >
+                      Chiudi Anteprima
+                    </button>
+                  </div>
+                </div>
+                <div id="pdf-scroll-container" className="flex-1 bg-neutral-100 p-4 flex flex-col h-full overflow-hidden justify-center items-center">
+                  {(() => {
+                    const previewTav = tavole.find(t => t.id === activePreviewTavolaId);
+                    if (previewTav) {
+                      return <CanvasPDFPreview entities={entities} tavola={previewTav} />;
+                    }
+                    return (
+                      <iframe 
+                        src={pdfPreviewUrl} 
+                        className="w-full h-full border-none rounded bg-white shadow-inner flex-1" 
+                        title="Anteprima PDF"
+                      />
+                    );
+                  })()}
+                  <div className="mt-2 text-center text-xs text-neutral-500 font-medium pb-1 shrink-0">
+                    💡 Per stampare o salvare in PDF vettoriale reale con retini perfetti, clicca su <span className="font-bold text-orange-700">"Apri / Stampa a pagina intera"</span> o <span className="font-bold text-indigo-700">"Scarica File"</span>.
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+                 {/* Dynamic Floating/Docked Favorites Toolbars / Menu Speciali Preferiti */}
+          {(() => {
+            const leftDockedPanels = favoritePanels.filter(p => p.isDocked === 'left');
+            const rightDockedPanels = favoritePanels.filter(p => p.isDocked === 'right');
+
+            return favoritePanels.map((panel) => {
+              const isDocked = panel.isDocked;
+              const leftIndex = leftDockedPanels.findIndex(p => p.id === panel.id);
+              const rightIndex = rightDockedPanels.findIndex(p => p.id === panel.id);
+              const isDraggingThis = activeDraggingId === panel.id;
+              
+              // Dynamic placement coordinates with dampening transitions for satisfying dragging glide effect
+              let placementStyle: React.CSSProperties = {
+                left: panel.x,
+                top: panel.y,
+                transition: isDraggingThis
+                  ? 'left 0.12s cubic-bezier(0.12, 0.85, 0.2, 1), top 0.12s cubic-bezier(0.12, 0.85, 0.2, 1)'
+                  : 'left 0.3s cubic-bezier(0.16, 1, 0.3, 1), top 0.3s cubic-bezier(0.16, 1, 0.3, 1), right 0.3s, width 0.2s, height 0.2s',
+              };
+
+              if (isDocked === 'left' && !isDraggingThis) {
+                placementStyle = {
+                  left: leftIndex * 58,
+                  top: '15%',
+                  height: '70%',
+                  maxHeight: '520px',
+                  transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                };
+              } else if (isDocked === 'right' && !isDraggingThis) {
+                placementStyle = {
+                  right: rightIndex * 58,
+                  top: '15%',
+                  height: '70%',
+                  maxHeight: '520px',
+                  transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+                };
+              }
+
+              return (
+                <div
+                  key={panel.id}
+                  style={placementStyle}
+                  className={`absolute z-30 select-none bg-white/80 backdrop-blur-md border border-neutral-200/80 shadow-[0_12px_40px_rgba(0,0,0,0.06)] overflow-hidden flex flex-col pointer-events-auto ${
+                    isDraggingThis
+                      ? "ring-2 ring-indigo-500/30 shadow-indigo-500/10 scale-[1.01] z-40" 
+                      : ""
+                  } ${
+                    isDocked === 'left' 
+                      ? 'rounded-r-xl border-l-0' 
+                      : isDocked === 'right' 
+                        ? 'rounded-l-xl border-r-0' 
+                        : 'rounded-xl max-w-[70px]'
+                  }`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.dataTransfer.dropEffect = "copy";
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const toolName = e.dataTransfer.getData("text/plain");
+                  const source = e.dataTransfer.getData("source");
+
+                  if (toolName) {
+                    if (source === `favorites-${panel.id}`) return;
+
+                    if (source && source.startsWith("favorites-")) {
+                      const sourcePanelId = source.replace("favorites-", "");
+                      setFavoritePanels(prev => prev.map(p => {
+                        if (p.id === sourcePanelId) {
+                          return { ...p, tools: p.tools.filter(t => t !== toolName) };
+                        }
+                        return p;
+                      }).filter(p => p.tools.length > 0));
+                    }
+
+                    setFavoritePanels(prev => prev.map(p => {
+                      if (p.id === panel.id) {
+                        if (p.tools.includes(toolName)) return p;
+                        return { ...p, tools: [...p.tools, toolName] };
+                      }
+                      return p;
+                    }));
+                  }
+                }}
+              >
+                {/* Vertical discrete drag handle at top or side */}
+                <div
+                  onMouseDown={(e) => handleFavoritesMouseDown(e, panel.id)}
+                  className={`px-2 py-1.5 bg-neutral-100/90 hover:bg-neutral-200/50 text-neutral-600 flex items-center justify-between cursor-move text-[9px] uppercase font-mono font-bold tracking-wider border-b border-neutral-200/60 ${isDocked ? 'flex-col gap-1' : ''}`}
+                  title="Trascina per spostare o sganciare"
+                >
+                  <div className="flex flex-col items-center gap-0.5 pointer-events-none">
+                    <div className="flex gap-0.5">
+                      <div className="w-1 h-1 bg-neutral-400 rounded-full" />
+                      <div className="w-1 h-1 bg-neutral-400 rounded-full" />
+                      <div className="w-1 h-1 bg-neutral-400 rounded-full" />
+                    </div>
+                  </div>
+
+                  <span className="text-[8px] font-bold text-neutral-500 tracking-tighter block text-center truncate w-full scale-95 origin-center">
+                    {isDocked ? 'Snodato' : '★ Menu'}
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFavoritePanels(prev => prev.filter(p => p.id !== panel.id));
+                    }}
+                    title="Chiudi pannello"
+                    className="text-neutral-400 hover:text-red-500 transition-colors p-0.5"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Vertical list of tools */}
+                <div className={`p-1.5 flex flex-col gap-1.5 bg-white items-center min-w-[54px] justify-start overflow-y-auto ${isDocked ? 'h-full' : 'max-h-[360px]'}`}>
+                  {panel.tools.length === 0 ? (
+                    <div className="text-[8px] text-neutral-400 text-center w-full p-2">
+                       Vuoto
+                    </div>
+                  ) : (
+                    panel.tools.map((toolName) => {
+                      const IconComp = getToolIcon(toolName);
+                      return (
+                        <div
+                          key={toolName}
+                          draggable={true}
+                          onDragStart={(e) => {
+                            e.dataTransfer.setData("text/plain", toolName);
+                            e.dataTransfer.setData("source", `favorites-${panel.id}`);
+                          }}
+                          className="group relative"
+                        >
+                          <button
+                            onClick={() => handleToolClick(toolName)}
+                            className={`p-2 rounded-lg bg-neutral-50 border border-neutral-200/50 text-neutral-700 transition-all flex flex-col items-center justify-center gap-0.5 w-11 h-11 cursor-grab active:cursor-grabbing hover:bg-indigo-50/70 hover:text-indigo-950 hover:border-indigo-400/50 ${
+                              selectedTool === toolName ? "bg-indigo-50 border-indigo-400 text-indigo-950 font-bold shadow-xs" : ""
+                            }`}
+                            title={`${toolName} - Trascina per spostare o rimuovere`}
+                          >
+                            {IconComp ? <IconComp size={15} className="text-neutral-600 group-hover:text-indigo-600 transition-colors" /> : null}
+                            <span className="text-[7.5px] font-sans font-medium text-neutral-500 truncate w-full text-center tracking-tight leading-none">
+                              {toolName}
+                            </span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setFavoritePanels(prev => {
+                                return prev.map(p => {
+                                  if (p.id === panel.id) {
+                                    return { ...p, tools: p.tools.filter(t => t !== toolName) };
+                                  }
+                                  return p;
+                                }).filter(p => p.tools.length > 0);
+                              });
+                            }}
+                            className="absolute -top-1 -right-1 hidden group-hover:flex w-3.5 h-3.5 bg-red-500 hover:bg-red-600 text-white rounded-full items-center justify-center text-[7px] border border-white font-black"
+                            title="Rimuovi"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            );
+          });
+        })()}
+
+
+
+          {/* Minimalist centered transparent watermark */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center justify-center pointer-events-none select-none text-center z-10 opacity-35 hover:opacity-75 transition-opacity duration-300">
+            <span className="text-[9.5px] font-sans tracking-wider text-neutral-600 font-medium">
+              Copyright © 2026 Domenico Gimondo
+            </span>
+            <span className="text-[8.5px] font-mono tracking-[0.3em] text-neutral-500 font-bold mt-0.5 uppercase">
+              AETERNA
+            </span>
+          </div>
+        </main>
+
+        {shortcutToast && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-neutral-800 text-white px-4 py-2 rounded-md shadow-lg pointer-events-none z-50 text-sm animate-pulse">
+            {shortcutToast}
+          </div>
+        )}
+
+        {/* Properties Panel (Drawer) */}
+        {showProperties && (
+          <div className="w-80 bg-white border-l border-neutral-300 p-4 transition-all overflow-y-auto overflow-x-hidden flex flex-col h-full">
+            <h3 className="font-bold mb-4 flex justify-between items-center text-neutral-800 border-b border-neutral-100 pb-2">
+              <span className="text-xs font-black uppercase tracking-wider font-mono">
+                {activeSidebarTab === "tavole" ? "Gestione Tavole" 
+                  : activeSidebarTab === "layers" ? "Gestione Layers" 
+                  : activeSidebarTab === "maschere" ? "Archivio Maschere" 
+                  : activeSidebarTab === "testo" ? "Impostazioni Testo"
+                  : activeSidebarTab === "gemini" ? "Disegno Gemini AI"
+                  : activeSidebarTab === "bim" ? "Tecnologia BIM / I.A."
+                  : "Mazzo Penne & Stili"}
+              </span>
+              <button 
+                onClick={() => setShowProperties(false)} 
+                className="text-neutral-400 hover:text-neutral-600 font-bold font-mono text-sm p-1"
+              >
+                ✕
+              </button>
+            </h3>
+
+            <div className="space-y-4 flex-1">
+              {activeSidebarTab === "bim" && isBIMModeEnabled ? (
+                <BIMWorkspacePanel
+                  entities={entities}
+                  selectedTool={selectedTool}
+                  setSelectedTool={setSelectedTool}
+                  setEntities={setEntities}
+                  onCommitHistory={commitToHistory}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                  cadCanvasRef={cadCanvasRef}
+                  selectedTemplateId={selectedTemplateId}
+                  setSelectedTemplateId={setSelectedTemplateId}
+                  onOpenPorte={() => setIsBIMPorteOpen(true)}
+                  onOpenFinestre={() => setIsBIMFinestreOpen(true)}
+                  onOpenArredi={() => setIsBIMArrediOpen(true)}
+                  onOpenSanitari={() => setIsBIMSanitariOpen(true)}
+                  onOpenElettrico={() => setIsBIMElettricoOpen(true)}
+                  onOpenIdraulico={() => setIsBIMIdraulicoOpen(true)}
+                  onOpenFiniture={() => setIsBIMFinitureOpen(true)}
+                  onEditArea={handleEditBIMArea}
+                  onOpen3DView={() => setIs3DViewOpen(true)}
+                />
+              ) : selectedTool === 'Muro' ? (
+                <div className="space-y-4">
+                  <div className="bg-cyan-50 border border-cyan-200 p-3 rounded-lg shadow-sm">
+                    <p className="text-[11px] text-cyan-900 leading-normal font-sans">
+                      <span className="font-bold">🧱 IMPOSTAZIONI MURO:</span> Definisci la tipologia e le dimensioni.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-mono">Spessore (cm)</label>
+                      <input
+                        type="number"
+                        value={bimWallThickness}
+                        onChange={(e) => {
+                          setBimWallThickness(parseInt(e.target.value) || 15);
+                          localStorage.setItem('lastWallThickness', e.target.value);
+                        }}
+                        className="w-full bg-neutral-50 border border-neutral-300 rounded p-2 text-xs font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-mono">Altezza (cm)</label>
+                      <input
+                        type="number"
+                        value={bimWallHeight}
+                        onChange={(e) => {
+                          setBimWallHeight(parseInt(e.target.value) || 270);
+                          localStorage.setItem('lastWallHeight', e.target.value);
+                        }}
+                        className="w-full bg-neutral-50 border border-neutral-300 rounded p-2 text-xs font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-mono">Tipo Muratura</label>
+                      <select
+                        value={bimWallType}
+                        onChange={(e) => {
+                          setBimWallType(e.target.value);
+                          localStorage.setItem('lastWallType', e.target.value);
+                        }}
+                        className="w-full bg-neutral-50 border border-neutral-300 rounded p-2 text-xs font-mono"
+                      >
+                        {MASONRY_TYPES.map(type => (
+                          <option key={type} value={type}>{type}</option>
+                        ))}
+                      </select>
+                  </div>
+                </div>
+              ) : activeSidebarTab === "gemini" ? (
+                <div className="space-y-4">
+                  <div className="bg-amber-50 border border-amber-200 p-3 rounded-lg shadow-sm">
+                    <p className="text-[11px] text-amber-900 leading-normal font-sans">
+                      <span className="font-bold">🔮 DIALOGA CON GEMINI CAD:</span> Descrivi cosa vuoi disegnare. Riceverai un codice parametrico visualizzabile ed modificabile in tempo reale.
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    {/* Prompt input */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-mono">
+                        Cosa desideri disegnare?
+                      </label>
+                      <textarea
+                        className="w-full bg-neutral-50 hover:bg-neutral-100 focus:bg-white border border-neutral-300 text-xs rounded p-2 focus:ring-2 focus:ring-indigo-500 outline-none transition-all placeholder:text-neutral-400 font-sans leading-relaxed"
+                        rows={3}
+                        value={geminiPrompt}
+                        onChange={(e) => setGeminiPrompt(e.target.value)}
+                        placeholder="Es: un tavolo da pranzo 160x80 con 6 sedie, oppure una scala con 5 alzate..."
+                      />
+                    </div>
+
+                    {/* Presets */}
+                    <div className="space-y-1.5 pt-1">
+                      <span className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider block font-mono">Esempi rapidi:</span>
+                      <div className="grid grid-cols-2 gap-1">
+                        {[
+                          { label: "Tavolo e sedie", text: "tavolo rettangolare 160x90 con 6 sedie attorno" },
+                          { label: "Ingranaggio", text: "ingranaggio circolare raggio 35 con 10 denti rettangolari" },
+                          { label: "Scala a gradini", text: "una scala a gradini con 5 alzate da 18 e pedate da 28" },
+                          { label: "Piscina ovale", text: "piscina ovale formata da un rettangolo centrale 100x50 e due semicerchi laterali" }
+                        ].map((preset, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setGeminiPrompt(preset.text)}
+                            className="bg-neutral-100 hover:bg-neutral-200 text-neutral-700 text-[9px] px-1.5 py-1 rounded transition-colors font-medium border border-neutral-200 text-left truncate"
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Generate Button */}
+                    <button
+                      onClick={async () => {
+                        if (!geminiPrompt.trim()) return;
+                        setGeminiIsLoading(true);
+                        try {
+                          const response = await fetch("/api/ai-draw", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ prompt: geminiPrompt })
+                          });
+                          if (!response.ok) {
+                            throw new Error("Generazione fallita.");
+                          }
+                          const data = await response.json();
+                          if (data.script) {
+                            setGeminiResponse(data);
+                            setGeminiDslScript(data.script);
+                            
+                            // Initialize parameters
+                            const initialParams: Record<string, number> = {};
+                            if (data.parameters) {
+                              data.parameters.forEach((p: any) => {
+                                initialParams[p.name] = p.value;
+                              });
+                            }
+                            setGeminiParams(initialParams);
+                          }
+                        } catch (err: any) {
+                          console.error(err);
+                          alert("Impossibile connettersi o ricevere dati da Gemini: " + err.message);
+                        } finally {
+                          setGeminiIsLoading(false);
+                        }
+                      }}
+                      disabled={geminiIsLoading || !geminiPrompt.trim()}
+                      className={`w-full py-2 px-3 rounded-md font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-sm ${
+                        geminiIsLoading 
+                          ? "bg-neutral-200 text-neutral-400 cursor-not-allowed" 
+                          : "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 active:from-amber-700 text-white hover:shadow-md cursor-pointer"
+                      }`}
+                    >
+                      <Sparkles size={14} className={geminiIsLoading ? "animate-spin text-amber-500" : "text-white"} />
+                      <span>{geminiIsLoading ? "Elaborazione IA..." : "Chiedi a Gemini"}</span>
+                    </button>
+
+                    {/* Gemini Result / Script Area */}
+                    {geminiResponse && (
+                      <div className="space-y-4 pt-3 border-t border-neutral-100">
+                        {/* Explanation */}
+                        {geminiResponse.explanation && (
+                          <div className="bg-neutral-50 border border-neutral-200 rounded p-2 text-[10.5px] text-neutral-600 leading-relaxed font-sans">
+                            <span className="font-bold text-neutral-800 block mb-0.5">Note di Progetto:</span>
+                            {geminiResponse.explanation}
+                          </div>
+                        )}
+
+                        {/* Interactive Sliders/Inputs for Parameters */}
+                        {geminiResponse.parameters && geminiResponse.parameters.length > 0 && (
+                          <div className="space-y-2 bg-indigo-50/50 border border-indigo-100 rounded p-2.5">
+                            <span className="text-[9px] font-black uppercase text-indigo-800 tracking-wider font-mono flex items-center gap-1">
+                              <Sparkles size={10} className="text-indigo-500 animate-pulse" />
+                              Parametri Dinamici (Tweak)
+                            </span>
+                            
+                            <div className="space-y-1.5">
+                              {geminiResponse.parameters.map((p, idx) => {
+                                const currentVal = geminiParams[p.name] !== undefined ? geminiParams[p.name] : p.value;
+                                return (
+                                  <div key={idx} className="space-y-0.5">
+                                    <div className="flex justify-between items-center text-[10px] font-bold text-neutral-600">
+                                      <span className="truncate max-w-[150px]">{p.label || p.name}</span>
+                                      <span className="font-mono text-indigo-700 font-black bg-indigo-100/50 px-1.5 py-0.5 rounded text-[8.5px]">{currentVal}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="range"
+                                        min={Math.max(1, Math.round(p.value * 0.2))}
+                                        max={Math.round(p.value * 5)}
+                                        value={currentVal}
+                                        onChange={(e) => {
+                                          const newVal = Number(e.target.value);
+                                          const updated = { ...geminiParams, [p.name]: newVal };
+                                          setGeminiParams(updated);
+                                          
+                                          // Immediately rewrite variable declaration inside DSL script
+                                          const updatedScript = updateScriptVariables(geminiDslScript, updated);
+                                          setGeminiDslScript(updatedScript);
+                                        }}
+                                        className="flex-1 accent-indigo-600 h-1 bg-neutral-300 rounded-lg appearance-none cursor-pointer"
+                                      />
+                                      <input
+                                        type="number"
+                                        value={currentVal}
+                                        onChange={(e) => {
+                                          const newVal = Number(e.target.value);
+                                          const updated = { ...geminiParams, [p.name]: newVal };
+                                          setGeminiParams(updated);
+                                          
+                                          // Immediately rewrite variable declaration
+                                          const updatedScript = updateScriptVariables(geminiDslScript, updated);
+                                          setGeminiDslScript(updatedScript);
+                                        }}
+                                        className="w-12 bg-white border border-neutral-300 rounded text-center text-[10px] font-bold py-0.5 outline-none focus:border-indigo-500"
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Interactive Script Text Area */}
+                        <div className="space-y-1">
+                          <div className="flex justify-between items-center">
+                            <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-mono">
+                              Codice Disegno (DSL)
+                            </label>
+                            <span className="text-[8px] bg-emerald-100 text-emerald-800 font-bold uppercase font-mono px-1.5 rounded">
+                              Modificabile!
+                            </span>
+                          </div>
+                          
+                          <textarea
+                            className="w-full bg-slate-900 text-emerald-400 text-[10px] leading-tight font-mono rounded p-2 min-h-[140px] focus:ring-1 focus:ring-emerald-500 focus:outline-none shadow-inner border border-slate-700"
+                            value={geminiDslScript}
+                            onChange={(e) => setGeminiDslScript(e.target.value)}
+                            spellCheck={false}
+                          />
+                        </div>
+
+                        {/* Insertion offset */}
+                        <div className="space-y-1 bg-neutral-50 rounded p-2 border border-neutral-200">
+                          <label className="text-[9px] font-black uppercase text-neutral-400 tracking-widest block font-mono mb-1">
+                            Punto di Inserimento (X, Y)
+                          </label>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="flex items-center gap-1 bg-white border border-neutral-300 rounded px-1.5 py-0.5">
+                              <span className="text-[9px] text-neutral-400 font-bold font-mono">X:</span>
+                              <input
+                                type="number"
+                                className="w-full text-xs font-bold outline-none border-none p-0 bg-transparent text-neutral-800"
+                                value={geminiInsertX}
+                                onChange={(e) => setGeminiInsertX(Number(e.target.value))}
+                              />
+                            </div>
+                            <div className="flex items-center gap-1 bg-white border border-neutral-300 rounded px-1.5 py-0.5">
+                              <span className="text-[9px] text-neutral-400 font-bold font-mono">Y:</span>
+                              <input
+                                type="number"
+                                className="w-full text-xs font-bold outline-none border-none p-0 bg-transparent text-neutral-800"
+                                value={geminiInsertY}
+                                onChange={(e) => setGeminiInsertY(Number(e.target.value))}
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Apply Drawing Button */}
+                        <button
+                          onClick={handleImportGemini}
+                          className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-black text-xs uppercase tracking-widest rounded-md flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+                        >
+                          <Check size={14} />
+                          <span>Importa nel Disegno</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : activeSidebarTab === "testo" ? (
+                <div className="space-y-6">
+                  {selectedEntity && selectedEntity.type === 'text' ? (
+                     <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 p-3 rounded-lg shadow-sm">
+                       <p className="text-[10px] leading-tight font-mono font-bold">
+                         MODIFICA TESTO SELEZIONATO
+                       </p>
+                     </div>
+                  ) : (
+                     <div className="bg-neutral-800 text-neutral-100 p-3 rounded-lg shadow-lg border border-neutral-700">
+                       <p className="text-[10px] leading-tight font-mono opacity-80">
+                         <span className="text-amber-400 font-bold">INSERIMENTO TESTO:</span><br/>
+                         Seleziona lo strumento Testo e clicca nell'area di lavoro.
+                       </p>
+                     </div>
+                  )}
+                  
+                  <div className="space-y-4">
+                    {selectedEntity && selectedEntity.type === 'text' && (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">Contenuto Testo</label>
+                          <textarea 
+                            className="w-full bg-white border border-neutral-300 text-xs rounded p-2 focus:ring-2 focus:ring-indigo-500"
+                            rows={3}
+                            value={(selectedEntity as import('./types').TextEntity).text}
+                            onChange={(e) => updateEntity(selectedEntity.id, { text: e.target.value })}
+                          />
+                        </div>
+                    )}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">Famiglia Carattere</label>
+                      <select 
+                        className="w-full bg-white border border-neutral-300 text-xs rounded p-2 font-semibold"
+                        value={selectedEntity && selectedEntity.type === 'text' ? (selectedEntity as import('./types').TextEntity).fontFamily : defaultTextStyle.fontFamily}
+                        onChange={(e) => {
+                            if (selectedEntity && selectedEntity.type === 'text') updateEntity(selectedEntity.id, { fontFamily: e.target.value });
+                            else setDefaultTextStyle(prev => ({ ...prev, fontFamily: e.target.value }));
+                        }}
+                      >
+                        <option value="sans-serif">Sans Serif</option>
+                        <option value="serif">Serif</option>
+                        <option value="monospace">Monospace</option>
+                        <option value="Arial">Arial</option>
+                        <option value="Times New Roman">Times New Roman</option>
+                        <option value="Courier New">Courier New</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">Grandezza Testo</label>
+                       <input 
+                         type="number"
+                         min="8"
+                         max="144"
+                         className="w-full bg-white border border-neutral-300 text-xs rounded p-2 font-semibold text-center"
+                         value={selectedEntity && selectedEntity.type === 'text' ? (selectedEntity as import('./types').TextEntity).fontSize : defaultTextStyle.fontSize}
+                         onChange={(e) => {
+                             if (selectedEntity && selectedEntity.type === 'text') updateEntity(selectedEntity.id, { fontSize: Number(e.target.value) });
+                             else setDefaultTextStyle(prev => ({ ...prev, fontSize: Number(e.target.value) }));
+                         }}
+                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">Stile (Grassetto)</label>
+                      <div className="flex gap-2">
+                         <button 
+                           onClick={() => {
+                               if (selectedEntity && selectedEntity.type === 'text') updateEntity(selectedEntity.id, { fontWeight: 'normal' });
+                               else setDefaultTextStyle(prev => ({ ...prev, fontWeight: 'normal' }));
+                           }}
+                           className={`flex-1 p-2 border rounded text-xs transition-all ${(selectedEntity && selectedEntity.type === 'text' ? (selectedEntity as import('./types').TextEntity).fontWeight : defaultTextStyle.fontWeight) === 'normal' ? 'bg-indigo-600 text-white font-bold' : 'bg-neutral-50 hover:bg-neutral-100'}`}
+                         >Normale</button>
+                         <button 
+                           onClick={() => {
+                               if (selectedEntity && selectedEntity.type === 'text') updateEntity(selectedEntity.id, { fontWeight: 'bold' });
+                               else setDefaultTextStyle(prev => ({ ...prev, fontWeight: 'bold' }));
+                           }}
+                           className={`flex-1 p-2 border rounded text-xs transition-all ${(selectedEntity && selectedEntity.type === 'text' ? (selectedEntity as import('./types').TextEntity).fontWeight : defaultTextStyle.fontWeight) === 'bold' ? 'bg-indigo-600 text-white font-bold' : 'bg-neutral-50 hover:bg-neutral-100 font-bold'}`}
+                         >Grassetto</button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">Allineamento</label>
+                      <div className="flex gap-2">
+                         {['left', 'center', 'right', 'justify'].map((align) => (
+                           <button 
+                             key={align}
+                             onClick={() => {
+                                 if (selectedEntity && selectedEntity.type === 'text') updateEntity(selectedEntity.id, { textAlign: align as any });
+                                 else setDefaultTextStyle(prev => ({ ...prev, textAlign: align as any }));
+                             }}
+                             className={`flex-1 p-2 border rounded text-xs transition-all flex justify-center items-center ${(selectedEntity && selectedEntity.type === 'text' ? (selectedEntity as import('./types').TextEntity).textAlign : defaultTextStyle.textAlign) === align ? 'bg-indigo-600 text-white' : 'bg-neutral-50 hover:bg-neutral-100'}`}
+                           >
+                              {align === 'left' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="17" y1="10" x2="3" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="17" y1="18" x2="3" y2="18"></line></svg>}
+                              {align === 'center' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="10" x2="6" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="18" y1="18" x2="6" y2="18"></line></svg>}
+                              {align === 'right' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="21" y1="10" x2="7" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="21" y1="18" x2="7" y2="18"></line></svg>}
+                              {align === 'justify' && <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="21" y1="10" x2="3" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="21" y1="18" x2="3" y2="18"></line></svg>}
+                           </button>
+                         ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                       <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">Colore Testo</label>
+                       <div className="grid grid-cols-5 gap-2">
+                         {['#000000', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#64748b'].map((c) => {
+                             const isSelected = selectedEntity && selectedEntity.type === 'text' ? (selectedEntity as import('./types').TextEntity).color === c : defaultLineStyle.color === c;
+                             return (
+                               <button
+                                 key={c}
+                                 onClick={() => {
+                                     if (selectedEntity && selectedEntity.type === 'text') updateEntity(selectedEntity.id, { color: c });
+                                     else setDefaultLineStyle(prev => ({ ...prev, color: c }));
+                                 }}
+                                 className={`w-full aspect-square rounded-full flex items-center justify-center transition-transform ${isSelected ? "ring-2 ring-offset-2 ring-indigo-500 scale-110 shadow-md" : "hover:scale-105 border border-black/10"}`}
+                                 style={{ backgroundColor: c }}
+                               >
+                                 {isSelected && <Check size={10} className="text-white drop-shadow-md" />}
+                               </button>
+                             );
+                         })}
+                       </div>
+                    </div>
+                  </div>
+                </div>
+              ) : activeSidebarTab === "penne" ? (
+                <div className="space-y-6">
+                  {selectedEntity ? (
+                    selectedEntity.type === "hatch" ? (
+                    <div className="space-y-4 font-sans">
+                      <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 p-3 rounded-lg shadow-sm">
+                        <p className="text-[10px] leading-tight font-mono font-bold uppercase">
+                          ⚙️ MODIFICA RIEMPIMENTO (HATCH)
+                        </p>
+                      </div>
+                      
+                      {/* Pattern Selector */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block">Stile Retino (Pattern)</label>
+                        <select
+                          className="w-full bg-white border border-neutral-300 text-xs rounded p-2 font-semibold capitalize focus:ring-2 focus:ring-indigo-500"
+                          value={(selectedEntity as any).pattern || 'ANSI31'}
+                          onChange={(e) => updateEntity(selectedEntity.id, { pattern: e.target.value })}
+                        >
+                          <option value="Solid">Pieno (Solid)</option>
+                          <option value="ANSI31">ANSI31 (Obliquo Semplice)</option>
+                          <option value="ANSI32">ANSI32 (Obliquo Doppio)</option>
+                          <option value="ANSI33">ANSI33 (Dashed/Solid Obliquo)</option>
+                          <option value="ANSI34">ANSI34 (Obliquo Tratteggiato)</option>
+                          <option value="Grid">Griglia (Quadrettato)</option>
+                          <option value="Cross">Incrocio (Griglia 45°)</option>
+                          <option value="Stripe">Strisce Verticali</option>
+                          <option value="Horizontal">Strisce Orizzontali</option>
+                          <option value="Zigzag">Zig-Zag</option>
+                          <option value="Waves">Onde</option>
+                          <option value="Brick">Mattoni CAD</option>
+                          <option value="Checker">Scacchiera (Checker)</option>
+                          <option value="Triangles">Triangoli</option>
+                          <option value="Honey">Nido d'ape (Honey)</option>
+                          <option value="Gravel">Ghiaia (Pebbles)</option>
+                          <option value="Cobble">Ciottolato (Cobble)</option>
+                          <option value="Plaid">Tartan (Plaid)</option>
+                          <option value="Stars">Stelle</option>
+                          <option value="Basket">Basket Weave</option>
+                        </select>
+                      </div>
+                      
+                      {/* Scale Slider / Input */}
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block">Dimensione / Scala</label>
+                          <span className="text-[10px] font-mono font-bold text-neutral-600">{(selectedEntity as any).scale || 15}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="4"
+                          max="180"
+                          step="1"
+                          className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          value={(selectedEntity as any).scale || 15}
+                          onChange={(e) => updateEntity(selectedEntity.id, { scale: Number(e.target.value) })}
+                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min="2"
+                            max="500"
+                            className="w-full bg-white border border-neutral-300 text-xs rounded p-1.5 text-center font-mono font-semibold"
+                            value={(selectedEntity as any).scale || 15}
+                            onChange={(e) => updateEntity(selectedEntity.id, { scale: Math.max(2, Number(e.target.value)) })}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Angle Slider / Input */}
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Inclinazione Retino (°)</label>
+                          <span className="text-[10px] font-mono font-bold text-neutral-600">{(selectedEntity as any).angle || 0}°</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="360"
+                          step="1"
+                          className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          value={(selectedEntity as any).angle || 0}
+                          onChange={(e) => updateEntity(selectedEntity.id, { angle: Number(e.target.value) })}
+                        />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min="0"
+                            max="360"
+                            className="w-full bg-white border border-neutral-300 text-xs rounded p-1.5 text-center font-mono font-semibold"
+                            value={(selectedEntity as any).angle || 0}
+                            onChange={(e) => updateEntity(selectedEntity.id, { angle: Number(e.target.value) % 360 })}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Color selection */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Colore del Retino</label>
+                        <div className="grid grid-cols-5 gap-2 mt-2">
+                          {['#000000', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#64748b'].map((c) => (
+                            <button
+                              key={c}
+                              onClick={() => updateEntity(selectedEntity.id, { color: c })}
+                              className={`w-full aspect-square rounded-full flex items-center justify-center transition-transform ${selectedEntity.color === c ? "ring-2 ring-offset-2 ring-indigo-500 scale-110 shadow-md" : "hover:scale-105 border border-black/10"}`}
+                              style={{ backgroundColor: c }}
+                            >
+                              {selectedEntity.color === c && <Check size={10} className="text-white drop-shadow-md" />}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Sfumatura (Radial Gradient) Slider */}
+                      <div className="space-y-1.5 pt-2 border-t border-neutral-100">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Sfumatura (Gradiente)</label>
+                          <span className="text-[10px] font-mono font-bold text-neutral-600">{(selectedEntity as any).sfumatura || 0}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          step="1"
+                          className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          value={(selectedEntity as any).sfumatura || 0}
+                          onChange={(e) => updateEntity(selectedEntity.id, { sfumatura: Number(e.target.value) })}
+                        />
+                        <p className="text-[9px] text-neutral-400 leading-tight">Crea una sfumatura radiale dal centro (ideale per riempimenti solidi)</p>
+                      </div>
+                    </div>
+                  ) : selectedEntity.type === "image" ? (
+                    <div className="space-y-4 font-sans">
+                      <div className="bg-blue-50 border border-blue-200 text-blue-900 p-3 rounded-lg shadow-sm">
+                        <p className="text-[10px] leading-tight font-mono font-bold uppercase">
+                          🖼️ MODIFICA IMMAGINE
+                        </p>
+                      </div>
+                      
+                      {/* Scale / Width Slider */}
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block">Larghezza</label>
+                          <span className="text-[10px] font-mono font-bold text-neutral-600">{Math.round((selectedEntity as any).width || 100)}</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="10"
+                          max="2000"
+                          step="10"
+                          className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          value={(selectedEntity as any).width || 100}
+                          onChange={(e) => {
+                            const newW = Number(e.target.value);
+                            const ar = (selectedEntity as any).aspectRatio || 1;
+                            updateEntity(selectedEntity.id, { width: newW, height: newW / ar });
+                          }}
+                        />
+                      </div>
+
+                      {/* Angle Slider */}
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Rotazione (°)</label>
+                          <span className="text-[10px] font-mono font-bold text-neutral-600">{(selectedEntity as any).angle || 0}°</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="360"
+                          step="1"
+                          className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          value={(selectedEntity as any).angle || 0}
+                          onChange={(e) => updateEntity(selectedEntity.id, { angle: Number(e.target.value) })}
+                        />
+                      </div>
+
+                      {/* Opacity Slider */}
+                      <div className="space-y-1.5 pt-2 border-t border-neutral-100">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Opacità (%)</label>
+                          <span className="text-[10px] font-mono font-bold text-neutral-600">{Math.round(((selectedEntity as any).opacity ?? 1) * 100)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="10"
+                          max="100"
+                          step="1"
+                          className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          value={Math.round(((selectedEntity as any).opacity ?? 1) * 100)}
+                          onChange={(e) => updateEntity(selectedEntity.id, { opacity: Number(e.target.value) / 100 })}
+                        />
+                        <p className="text-[9px] text-neutral-400 leading-tight">Regola la trasparenza per ricalcare o posizionare sfondi</p>
+                      </div>
+
+                      {/* Brightness / Contrast */}
+                      <div className="space-y-1.5 pt-2 border-t border-neutral-100">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Luminosità</label>
+                          <span className="text-[10px] font-mono font-bold text-neutral-600">{(selectedEntity as any).brightness ?? 100}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="200"
+                          step="5"
+                          className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                          value={(selectedEntity as any).brightness ?? 100}
+                          onChange={(e) => updateEntity(selectedEntity.id, { brightness: Number(e.target.value) })}
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Contrasto</label>
+                          <span className="text-[10px] font-mono font-bold text-neutral-600">{(selectedEntity as any).contrast ?? 100}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="200"
+                          step="5"
+                          className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                          value={(selectedEntity as any).contrast ?? 100}
+                          onChange={(e) => updateEntity(selectedEntity.id, { contrast: Number(e.target.value) })}
+                        />
+                      </div>
+
+                      {/* Ritaglio (Crop) */}
+                      <div className="space-y-1.5 pt-2 border-t border-neutral-100">
+                        <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans mb-1">Ritaglia Immagine (%)</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="flex justify-between items-center bg-neutral-50 px-2 py-1 border border-neutral-200 rounded">
+                            <span className="text-[9px] text-neutral-500 uppercase tracking-wide">← Sinistra</span>
+                            <input
+                              type="number" min="0" max="90" step="1"
+                              className="w-10 text-right text-[10px] bg-transparent outline-none font-mono"
+                              value={(selectedEntity as any).crop?.left || 0}
+                              onChange={(e) => updateEntity(selectedEntity.id, { crop: { ...(selectedEntity as any).crop, left: Math.min(90, Math.max(0, Number(e.target.value))) } })}
+                            />
+                          </div>
+                          <div className="flex justify-between items-center bg-neutral-50 px-2 py-1 border border-neutral-200 rounded">
+                            <span className="text-[9px] text-neutral-500 uppercase tracking-wide">Destra →</span>
+                            <input
+                              type="number" min="0" max="90" step="1"
+                              className="w-10 text-right text-[10px] bg-transparent outline-none font-mono"
+                              value={(selectedEntity as any).crop?.right || 0}
+                              onChange={(e) => updateEntity(selectedEntity.id, { crop: { ...(selectedEntity as any).crop, right: Math.min(90, Math.max(0, Number(e.target.value))) } })}
+                            />
+                          </div>
+                          <div className="flex justify-between items-center bg-neutral-50 px-2 py-1 border border-neutral-200 rounded">
+                            <span className="text-[9px] text-neutral-500 uppercase tracking-wide">↑ Sopra</span>
+                            <input
+                              type="number" min="0" max="90" step="1"
+                              className="w-10 text-right text-[10px] bg-transparent outline-none font-mono"
+                              value={(selectedEntity as any).crop?.top || 0}
+                              onChange={(e) => updateEntity(selectedEntity.id, { crop: { ...(selectedEntity as any).crop, top: Math.min(90, Math.max(0, Number(e.target.value))) } })}
+                            />
+                          </div>
+                          <div className="flex justify-between items-center bg-neutral-50 px-2 py-1 border border-neutral-200 rounded">
+                            <span className="text-[9px] text-neutral-500 uppercase tracking-wide">Sotto ↓</span>
+                            <input
+                              type="number" min="0" max="90" step="1"
+                              className="w-10 text-right text-[10px] bg-transparent outline-none font-mono"
+                              value={(selectedEntity as any).crop?.bottom || 0}
+                              onChange={(e) => updateEntity(selectedEntity.id, { crop: { ...(selectedEntity as any).crop, bottom: Math.min(90, Math.max(0, Number(e.target.value))) } })}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Blend Mode Toggle */}
+                      <div className="pt-2 border-t border-neutral-100">
+                        <label className="flex items-center gap-2 cursor-pointer group">
+                          <div className="relative flex items-center justify-center">
+                            <input
+                              type="checkbox"
+                              checked={(selectedEntity as any).blendMode === 'multiply'}
+                              onChange={(e) => updateEntity(selectedEntity.id, { blendMode: e.target.checked ? 'multiply' : 'normal' })}
+                              className="peer sr-only"
+                            />
+                            <div className="w-8 h-4 bg-neutral-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-blue-600"></div>
+                          </div>
+                          <div>
+                            <span className="text-xs font-bold text-neutral-700 block transition-colors group-hover:text-blue-700">Rendi Sfondo Trasparente</span>
+                            <span className="text-[9px] text-neutral-400 block leading-tight mt-0.5">Applica fusione Moltiplica (il bianco scompare)</span>
+                          </div>
+                        </label>
+                      </div>
+
+                      {/* Convert to CAD Vectors */}
+                      <div className="pt-3 border-t border-neutral-100 space-y-3">
+                        <div className="bg-orange-50 border border-orange-200 p-2 rounded-lg space-y-2">
+                          <p className="text-[10px] uppercase font-bold text-orange-800 tracking-wider flex items-center gap-1"><Sparkles size={12}/> Vettorializzazione Avanzata</p>
+                          
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center">
+                              <label className="text-[9px] font-bold text-orange-900 block font-sans">Risoluzione Tracciato</label>
+                              <span className="text-[9px] font-mono text-orange-800">{(selectedEntity as any).traceResolution || 1500}px</span>
+                            </div>
+                            <input
+                              type="range" min="500" max="2500" step="100"
+                              className="w-full h-1 bg-orange-200 rounded-lg appearance-none cursor-pointer accent-orange-600"
+                              value={(selectedEntity as any).traceResolution || 1500}
+                              onChange={(e) => updateEntity(selectedEntity.id, { traceResolution: Number(e.target.value) })}
+                            />
+                          </div>
+
+                          <div className="space-y-1 pt-1">
+                            <div className="flex justify-between items-center">
+                              <label className="text-[9px] font-bold text-orange-900 block font-sans">Semplificazione Linee</label>
+                              <span className="text-[9px] font-mono text-orange-800">{(selectedEntity as any).traceSimplify ?? 0.5}</span>
+                            </div>
+                            <input
+                              type="range" min="0.1" max="5.0" step="0.1"
+                              className="w-full h-1 bg-orange-200 rounded-lg appearance-none cursor-pointer accent-orange-600"
+                              value={(selectedEntity as any).traceSimplify ?? 0.5}
+                              onChange={(e) => updateEntity(selectedEntity.id, { traceSimplify: Number(e.target.value) })}
+                            />
+                            <p className="text-[8px] text-orange-700 leading-tight">Meno semplificazione (sinistra) = più dettagli e angoli esatti.</p>
+                          </div>
+
+                          <div className="pt-1">
+                            <label className="flex items-center gap-2 cursor-pointer group">
+                              <div className="relative flex items-center justify-center">
+                                <input
+                                  type="checkbox"
+                                  checked={(selectedEntity as any).traceSmooth ?? false}
+                                  onChange={(e) => updateEntity(selectedEntity.id, { traceSmooth: e.target.checked })}
+                                  className="peer sr-only"
+                                />
+                                <div className="w-8 h-4 bg-orange-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-orange-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-orange-600"></div>
+                              </div>
+                              <div>
+                                <span className="text-[9px] font-bold text-orange-900 block font-sans transition-colors group-hover:text-orange-700">Ammorbidisci Contorni (Smooth)</span>
+                                <span className="text-[8px] text-orange-700 block leading-tight mt-0.5">Disabilitalo per piante architettoniche con angoli retti.</span>
+                              </div>
+                            </label>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => {
+                            const img = selectedEntity as any;
+                            const imgElement = document.createElement('img');
+                            imgElement.crossOrigin = 'anonymous';
+                            imgElement.src = img.src;
+                            imgElement.onload = () => {
+                              const maxDim = img.traceResolution || 1500; // max resolution for tracing
+                              const w = imgElement.naturalWidth;
+                              const h = imgElement.naturalHeight;
+                              const scaleToFit = Math.min(1, maxDim / Math.max(w, h));
+                              
+                              const traceW = Math.max(1, Math.floor(w * scaleToFit));
+                              const traceH = Math.max(1, Math.floor(h * scaleToFit));
+                              
+                              const cvs = document.createElement('canvas');
+                              cvs.width = traceW;
+                              cvs.height = traceH;
+                              const cx = cvs.getContext('2d');
+                              if (!cx) return;
+                              
+                              // Handle cropping
+                              const left = (img.crop?.left || 0) / 100;
+                              const top = (img.crop?.top || 0) / 100;
+                              const right = (img.crop?.right || 0) / 100;
+                              const bottom = (img.crop?.bottom || 0) / 100;
+                              
+                              const sx = left * w;
+                              const sy = top * h;
+                              const sw = w * (1 - left - right);
+                              const sh = h * (1 - top - bottom);
+                              
+                              if (sw <= 0 || sh <= 0) return;
+
+                              // Apply Brightness / Contrast during drawing so it affects trace
+                              let filters = [];
+                              if (img.brightness !== undefined) filters.push(`brightness(${img.brightness}%)`);
+                              if (img.contrast !== undefined) filters.push(`contrast(${img.contrast}%)`);
+                              if (filters.length > 0) {
+                                cx.filter = filters.join(' ');
+                              }
+                              
+                              cx.drawImage(imgElement, sx, sy, sw, sh, 0, 0, traceW, traceH);
+                              const idata = cx.getImageData(0, 0, traceW, traceH);
+                              const data = idata.data;
+                              
+                              const values = new Float32Array(traceW * traceH);
+                              for (let i = 0; i < traceW * traceH; i++) {
+                                const r = data[i*4];
+                                const g = data[i*4 + 1];
+                                const b = data[i*4 + 2];
+                                const a = data[i*4 + 3];
+
+                                if (img.blendMode === 'multiply') {
+                                  // Trasparenza in bianco (moltiplica). Il disegno è dove i pixel sono scuri.
+                                  const brightness = (r + g + b) / 3;
+                                  values[i] = 1 - (brightness / 255);
+                                } else {
+                                  // Se non usa la moltiplica, guardiamo l'alpha o il pixel non bianco
+                                  if (a < 50) {
+                                    values[i] = 0;
+                                  } else {
+                                    const brightness = (r + g + b) / 3;
+                                    values[i] = 1 - (brightness / 255);
+                                  }
+                                }
+                              }
+                              
+                              // We use 0.5 threshold to find boundaries
+                              const isSmooth = img.traceSmooth ?? false;
+                              const geoms = contours().size([traceW, traceH]).smooth(isSmooth).thresholds([0.5])(values);
+                              
+                              const newEntities: Entity[] = [];
+                              const baseId = `cad-svg-${Date.now()}`;
+                              const imgRenderW = img.width * (1 - left - right);
+                              const imgRenderH = img.height * (1 - top - bottom);
+
+                              const entScaleX = imgRenderW / traceW;
+                              const entScaleY = imgRenderH / traceH;
+                              
+                              const angleRad = (img.angle || 0) * Math.PI / 180;
+                              const cosA = Math.cos(angleRad);
+                              const sinA = Math.sin(angleRad);
+                              
+                              // Center of original image placement
+                              // The image is rendered from -img.width/2 to img.width/2 in its local space.
+                              // Wait, the CADCanvas rendering logic:
+                              // cx = img.point.x + img.width / 2;
+                              // cy = img.point.y + img.height / 2;
+                              // dx = -img.width / 2 + img.width * left;
+                              // dy = -img.height / 2 + img.height * top;
+                              
+                              const centerX = img.point.x + img.width / 2;
+                              const centerY = img.point.y + img.height / 2;
+                              const offsetX = -img.width / 2 + img.width * left;
+                              const offsetY = -img.height / 2 + img.height * top;
+
+                              let eCount = 0;
+                              
+                              for (const contour of geoms) {
+                                  if (!contour.coordinates || contour.coordinates.length === 0) continue;
+                                  for (const polygon of contour.coordinates) {
+                                      for (const ring of polygon) {
+                                          if (ring.length < 3) continue;
+
+                                          // Convert ring coordinates into full CAD point coords
+                                          const pts = ring.map(pt => {
+                                              let p1x = pt[0] * entScaleX;
+                                              let p1y = pt[1] * entScaleY;
+
+                                              // add offset
+                                              let relX = p1x + offsetX;
+                                              let relY = p1y + offsetY;
+                                              
+                                              // rotation
+                                              let rotX = relX * cosA - relY * sinA;
+                                              let rotY = relX * sinA + relY * cosA;
+                                              
+                                              return { x: centerX + rotX, y: centerY + rotY };
+                                          });
+
+                                          // Simplify
+                                          const simplified = simplifyPoints(pts, img.traceSimplify ?? 0.5);
+                                          if (simplified.length < 2) continue;
+
+                                          for (let i = 0; i < simplified.length - 1; i++) {
+                                              newEntities.push({
+                                                  type: 'line',
+                                                  id: `${baseId}-${eCount++}`,
+                                                  color: img.color || '#000000',
+                                                  lineWidth: 1,
+                                                  layer: img.layer || '0',
+                                                  start: simplified[i],
+                                                  end: simplified[i+1]
+                                              });
+                                          }
+                                      }
+                                  }
+                              }
+
+                              if (newEntities.length > 0) {
+                                  setEntities(prev => {
+                                      const next = prev.filter(e => e.id !== img.id).concat(newEntities);
+                                      commitToHistory(next);
+                                      return next;
+                                  });
+                                  setSelectedId(null);
+                                  setShortcutToast(`Successo! Immagine convertita in ${newEntities.length} linee vettoriali!`);
+                                  setTimeout(() => setShortcutToast(null), 4000);
+                              } else {
+                                  setShortcutToast(`Nessun tratto rilevato nell'immagine.`);
+                                  setTimeout(() => setShortcutToast(null), 3000);
+                              }
+                            };
+                          }}
+                          className="w-full relative overflow-hidden group py-2 px-3 rounded-lg flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-sm transition-all focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 focus:outline-none"
+                        >
+                          <div className="absolute inset-0 bg-[linear-gradient(45deg,transparent_25%,rgba(255,255,255,0.2)_50%,transparent_75%)] bg-[length:250%_250%] opacity-0 group-hover:opacity-100 group-hover:animate-[shimmer_2s_infinite]"></div>
+                          <Sparkles size={14} className="group-hover:rotate-12 transition-transform" />
+                          <span className="text-xs font-bold tracking-wide">Vettorializza in Linee CAD</span>
+                        </button>
+                        <p className="text-[9px] text-neutral-400 leading-tight mt-1.5 text-center">Trasforma l'immagine in tracce CAD in modo da poter usare la gomma o agganciare i punti.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <label className="block text-sm">
+                        Tipo Strumento:
+                        <div className="flex gap-2 mt-1">
+                          <button
+                            onClick={() =>
+                              updateEntity(selectedEntity.id, { mode: "pencil" })
+                            }
+                            className={`p-2 rounded flex-1 text-xs font-bold transition-all ${selectedEntity.mode === "pencil" ? "bg-amber-600 text-white" : "bg-neutral-200"}`}
+                          >
+                            Matita
+                          </button>
+                          <button
+                            onClick={() =>
+                              updateEntity(selectedEntity.id, { mode: "ink" })
+                            }
+                            className={`p-2 rounded flex-1 text-xs font-bold transition-all ${selectedEntity.mode === "ink" ? "bg-indigo-600 text-white" : "bg-neutral-200"}`}
+                          >
+                            Kina
+                          </button>
+                          <button
+                            onClick={() =>
+                              updateEntity(selectedEntity.id, { mode: "CAD" })
+                            }
+                            className={`p-2 rounded flex-1 text-xs font-bold transition-all ${selectedEntity.mode === "CAD" ? "bg-emerald-600 text-white" : "bg-neutral-200"}`}
+                          >
+                            CAD
+                          </button>
+                        </div>
+                      </label>
+                      <label className="block text-sm">
+                        Pennino:
+                        <div className="flex gap-2 mt-1">
+                          {[1, 2.5, 4].map((w) => (
+                            <button
+                              key={w}
+                              onClick={() =>
+                                updateEntity(selectedEntity.id, { lineWidth: w })
+                              }
+                              className={`p-2 rounded flex-1 text-xs font-bold ${selectedEntity.lineWidth === w ? "bg-indigo-600 text-white" : "bg-neutral-200 text-neutral-900 border border-neutral-400"}`}
+                            >
+                              p{w === 1 ? '1' : w === 2.5 ? '2' : '4'} ({w} mm)
+                            </button>
+                          ))}
+                        </div>
+                      </label>
+                      <label className="block text-sm mt-4">
+                        Colore:
+                        <div className="grid grid-cols-5 gap-2 mt-2">
+                          {['#000000', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#64748b'].map((c) => (
+                            <button
+                              key={c}
+                              onClick={() => updateEntity(selectedEntity.id, { color: c })}
+                              className={`w-full aspect-square rounded-full flex items-center justify-center transition-transform ${selectedEntity.color === c ? "ring-2 ring-offset-2 ring-indigo-500 scale-110 shadow-md" : "hover:scale-105 border border-black/10"}`}
+                              style={{ backgroundColor: c }}
+                            >
+                              {selectedEntity.color === c && <Check size={10} className="text-white drop-shadow-md" />}
+                            </button>
+                          ))}
+                        </div>
+                      </label>
+                      {selectedEntity.type === "dimension" && (
+                        <>
+                          <label className="block text-sm">
+                            Text:{" "}
+                            <input
+                              type="text"
+                              value={(selectedEntity as any).customText || ""}
+                              onChange={(e) =>
+                                updateEntity(selectedEntity.id, {
+                                  customText: e.target.value,
+                                })
+                              }
+                              className="w-full bg-neutral-100 p-2 mt-1 rounded text-xs"
+                            />
+                          </label>
+                          <button
+                            className="w-full bg-indigo-600 text-white p-2 text-xs font-bold rounded"
+                            onClick={() => setIsDimensionDialogOpen(true)}
+                          >
+                            Edit Style
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )) : (
+                    <>
+                      {selectedTool === 'Hatch' ? (
+                      <div className="space-y-4">
+                        <div className="bg-emerald-950 border border-emerald-800 text-emerald-100 p-4 rounded-xl shadow-lg">
+                          <p className="text-xs leading-normal font-sans">
+                            <span className="text-emerald-400 font-extrabold block mb-2 text-[10px] font-mono tracking-widest uppercase">✨ RIEMPIMENTO (HATCH):</span>
+                            Clicca in un qualsiasi punto interno a un'area chiusa per riempirla automaticamente con un retino geometrico (Hatch).
+                          </p>
+                          <div className="mt-3 text-[10px] text-emerald-300 font-medium space-y-2 pr-1">
+                            <div>• I contorni esterni devono intersecarsi o toccarsi completamente.</div>
+                          </div>
+                        </div>
+
+                        {/* Default Hatch Settings */}
+                        <div className="space-y-4 pt-2 border-t border-neutral-100">
+                          <p className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Impostazioni Predefinite</p>
+                          
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block">Stile Retino (Pattern)</label>
+                            <select
+                              className="w-full bg-white border border-neutral-300 text-xs rounded p-2 font-semibold capitalize"
+                              value={defaultHatchStyle.pattern}
+                              onChange={(e) => setDefaultHatchStyle(prev => ({ ...prev, pattern: e.target.value }))}
+                            >
+                              <option value="Solid">Pieno (Solid)</option>
+                              <option value="ANSI31">ANSI31 (Obliquo Semplice)</option>
+                              <option value="ANSI32">ANSI32 (Obliquo Doppio)</option>
+                              <option value="ANSI33">ANSI33 (Dashed/Solid Obliquo)</option>
+                              <option value="ANSI34">ANSI34 (Obliquo Tratteggiato)</option>
+                              <option value="Grid">Griglia (Quadrettato)</option>
+                              <option value="Cross">Incrocio (Griglia 45°)</option>
+                              <option value="Stripe">Strisce Verticali</option>
+                              <option value="Horizontal">Strisce Orizzontali</option>
+                              <option value="Zigzag">Zig-Zag</option>
+                              <option value="Brick">Mattoni CAD</option>
+                              <option value="Checker">Scacchiera (Checker)</option>
+                            </select>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <div className="flex justify-between items-center">
+                              <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block">Scala Retino</label>
+                              <span className="text-[10px] font-mono font-bold text-neutral-600">{defaultHatchStyle.scale}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="4"
+                              max="180"
+                              step="1"
+                              className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                              value={defaultHatchStyle.scale}
+                              onChange={(e) => setDefaultHatchStyle(prev => ({ ...prev, scale: Number(e.target.value) }))}
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                              <div className="flex justify-between items-center">
+                                <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block">Inclinazione (°)</label>
+                                <span className="text-[10px] font-mono font-bold text-neutral-600">{defaultHatchStyle.angle}°</span>
+                              </div>
+                              <input
+                                type="range"
+                                min="0"
+                                max="360"
+                                step="1"
+                                className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                value={defaultHatchStyle.angle}
+                                onChange={(e) => setDefaultHatchStyle(prev => ({ ...prev, angle: Number(e.target.value) }))}
+                              />
+                            </div>
+
+                            <div className="space-y-1.5 pt-2 border-t border-neutral-100">
+                              <div className="flex justify-between items-center">
+                                <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Sfumatura Predefinita</label>
+                                <span className="text-[10px] font-mono font-bold text-neutral-600">{(defaultHatchStyle as any).sfumatura || 0}%</span>
+                              </div>
+                              <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                step="1"
+                                className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                                value={(defaultHatchStyle as any).sfumatura || 0}
+                                onChange={(e) => setDefaultHatchStyle(prev => ({ ...prev, sfumatura: Number(e.target.value) }))}
+                              />
+                              <p className="text-[9px] text-neutral-400 leading-tight">I nuovi riempimenti solidi useranno questa sfumatura</p>
+                            </div>
+                          </div>
+                        </div>
+                    ) : selectedTool === 'Specchio' ? (
+                      <div className="bg-indigo-950 border border-indigo-800 text-indigo-100 p-4 rounded-xl shadow-lg">
+                        <p className="text-xs leading-normal font-sans">
+                          <span className="text-indigo-400 font-extrabold block mb-2 text-[10px] font-mono tracking-widest uppercase">✨ SPECCHIO (MIRROR):</span>
+                          Crea un asse di simmetria come un normale segmento... poi seleziona gli oggetti.
+                        </p>
+                      </div>
+                    ) : selectedTool === 'Eraser' ? (
+                      <div className="space-y-4">
+                        <div className="bg-neutral-900 border border-neutral-800 text-white p-3.5 rounded-xl shadow-xs">
+                          <p className="text-xs leading-normal font-sans mb-3">
+                            <span className="text-amber-400 font-extrabold block mb-2 text-[10px] font-mono tracking-widest uppercase">✨ GOMME DI PRECISIONE:</span>
+                            Entrambe le gomme hanno una punta sagomata ideale per cancellature di precisione assoluta.
+                          </p>
+                          <div className="bg-neutral-800/80 p-2.5 rounded-lg border border-neutral-700 space-y-1 text-[10px] text-neutral-300">
+                            <div className="flex items-center gap-1.5 font-bold text-amber-300">
+                              <MousePointer2 size={10} /> CLIC DESTRO SUL FOGLIO
+                            </div>
+                            <p className="font-sans leading-relaxed text-[9px]">Clicca col tasto destro del mouse sulla tavola da disegno per scambiare al volo le due gomme!</p>
+                          </div>
+                        </div>
+
+                        {/* Switch Eraser Type Options in UI */}
+                        <div className="space-y-4 pt-2 border-t border-neutral-100">
+                          <p className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Tipo di Gomma Attiva</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              onClick={() => setEraserType('pencil')}
+                              className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex flex-col gap-1.5 ${eraserType === 'pencil' ? 'bg-neutral-100 border-neutral-400 ring-4 ring-neutral-200' : 'bg-white border-neutral-200 hover:bg-neutral-50 shadow-xs'}`}
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-3.5 h-3.5 rounded bg-neutral-200 border border-neutral-400 shadow-xs inline-block"></span>
+                                <span className={`text-[10px] font-black uppercase tracking-wider ${eraserType === 'pencil' ? 'text-neutral-800' : 'text-neutral-500'}`}>Matita</span>
+                              </div>
+                              <span className="text-[9px] text-neutral-400 leading-snug">La classica bianca-grigia. Cancella solo linee a matita dura/media/morbida. Non tocca la china.</span>
+                            </button>
+
+                            <button
+                              onClick={() => setEraserType('all')}
+                              className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex flex-col gap-1.5 ${eraserType === 'all' ? 'bg-amber-50 border-amber-400 ring-4 ring-amber-100' : 'bg-white border-neutral-200 hover:bg-neutral-50 shadow-xs'}`}
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <span className="w-3.5 h-3.5 rounded bg-amber-400 border border-amber-600 shadow-xs inline-block"></span>
+                                <span className={`text-[10px] font-black uppercase tracking-wider ${eraserType === 'all' ? 'text-amber-800' : 'text-neutral-500'}`}>China/Tutto</span>
+                              </div>
+                              <span className="text-[9px] text-neutral-400 leading-snug">La classica gomma gialla. Rimuove china, matita, testi, retini e tutto il resto.</span>
+                            </button>
+                          </div>
+
+                          {/* Eraser radius slider */}
+                          <div className="space-y-2 pt-2 border-t border-neutral-100">
+                            <div className="flex justify-between items-center">
+                              <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest block font-sans">Spessore Punta Gomma</label>
+                              <span className="text-[10px] font-mono font-bold text-neutral-600">{eraserRadius} mm (px)</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="5"
+                              max="100"
+                              step="5"
+                              value={eraserRadius}
+                              onChange={(e) => setEraserRadius(Number(e.target.value))}
+                              className="w-full h-1 bg-neutral-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 font-bold"
+                            />
+                            <p className="text-[9px] text-neutral-400 leading-tight">Ottimizza la dimensione per cancellature precise.</p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="bg-neutral-800 text-neutral-100 p-3 rounded-lg shadow-lg border border-neutral-700">
+                          <p className="text-[10px] leading-tight font-mono opacity-80">
+                            <span className="text-amber-400 font-bold">PENNE TECNICHE:</span><br/>
+                            Scegli lo spessore del pennino. Il layer viene aggiornato automaticamente in base alla selezione.
+                          </p>
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">
+                               <Sparkles size={10} /> Stile Tecnico CAD
+                            </label>
+                            <div className="grid grid-cols-4 gap-2">
+                              {[0.25, 0.5, 1, 2].map(w => (
+                                <button
+                                  key={w}
+                                  onClick={() => {
+                                    setDefaultLineStyle({ mode: "CAD", color: '#000000', lineWidth: w, dashed: false });
+                                    handleToolClick("Line");
+                                  }}
+                                  className={`p-2 rounded-lg border transition-all flex flex-col items-center justify-center gap-1 ${defaultLineStyle.mode === "CAD" && defaultLineStyle.lineWidth === w ? "bg-emerald-900 border-emerald-700 ring-4 ring-emerald-200 shadow-md transform -translate-y-0.5" : "bg-neutral-50 border-neutral-200 hover:bg-white"}`}
+                                >
+                                  <span className={`text-[10px] font-black ${defaultLineStyle.mode === "CAD" && defaultLineStyle.lineWidth === w ? "text-white" : "text-neutral-500"}`}>
+                                    {w}
+                                  </span>
+                                  <span className="text-[8px] text-neutral-400">mm</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">
+                               <PenTool size={10} /> Pennini Kina
+                            </label>
+                            <div className="grid grid-cols-4 gap-2">
+                              {[0.25, 0.5, 1, 2].map(w => (
+                                <button
+                                  key={w}
+                                  onClick={() => {
+                                    setDefaultLineStyle({ mode: "ink", color: '#000000', lineWidth: w, dashed: false });
+                                    handleToolClick("Line");
+                                  }}
+                                  className={`p-2 rounded-lg border transition-all flex flex-col items-center justify-center gap-1 ${defaultLineStyle.mode === "ink" && defaultLineStyle.lineWidth === w ? "bg-indigo-900 border-neutral-700 ring-4 ring-neutral-200 shadow-md transform -translate-y-0.5" : "bg-neutral-50 border-neutral-200 hover:bg-white"}`}
+                                >
+                                  <span className={`text-[10px] font-black ${defaultLineStyle.mode === "ink" && defaultLineStyle.lineWidth === w ? "text-white" : "text-neutral-500"}`}>
+                                    {w}
+                                  </span>
+                                  <span className="text-[8px] text-neutral-400">mm</span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">
+                               <Pencil size={10} /> Matite di Grafite
+                            </label>
+                            <div className="grid grid-cols-3 gap-2">
+                              {['2H', 'HB', '2B'].map(m => {
+                                const color = m === '2H' ? '#bbbbbb' : (m === 'HB' ? '#444444' : '#111111');
+                                const width = m === '2H' ? 1 : (m === 'HB' ? 2 : 3);
+                                const isSelected = defaultLineStyle.mode === 'pencil' && defaultLineStyle.color === color;
+                                return (
+                                  <button
+                                    key={m}
+                                    onClick={() => {
+                                      setDefaultLineStyle({ mode: "pencil", color, lineWidth: width, dashed: false });
+                                      handleToolClick("Line");
+                                    }}
+                                    className={`p-2.5 rounded-lg border transition-all flex flex-col items-center justify-center gap-1 ${isSelected ? "bg-amber-50 border-amber-300 ring-4 ring-amber-100 shadow-md transform -translate-y-0.5" : "bg-neutral-50 border-neutral-200 hover:bg-white"}`}
+                                  >
+                                    <span className={`text-[10px] font-black ${isSelected ? "text-amber-800" : "text-neutral-500"}`}>{m}</span>
+                                    <span className="text-[8px] text-neutral-400">{m === '2H' ? 'Dura' : (m === 'HB' ? 'Media' : 'Morb.')}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 mt-4">
+                            <label className="text-[10px] font-black uppercase text-neutral-400 tracking-widest flex items-center gap-2">
+                               <Crosshair size={10} /> Colore Matita
+                            </label>
+                            <div className="grid grid-cols-5 gap-2">
+                              {['#000000', '#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#64748b'].map((c) => (
+                                <button
+                                  key={c}
+                                  onClick={() => {
+                                    setDefaultLineStyle(prev => ({ ...prev, color: c }));
+                                    handleToolClick("Line");
+                                  }}
+                                  className={`w-full aspect-square rounded-full flex items-center justify-center transition-transform ${defaultLineStyle.color === c ? "ring-2 ring-offset-2 ring-indigo-500 scale-110 shadow-md" : "hover:scale-105 border border-black/10"}`}
+                                  style={{ backgroundColor: c }}
+                                >
+                                  {defaultLineStyle.color === c && <Check size={10} className="text-white drop-shadow-md" />}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : activeSidebarTab === "layers" ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between mb-2 pb-2 border-b border-neutral-200">
+                        <h4 className="text-[10px] font-black text-neutral-800 uppercase tracking-wider font-mono">
+                          Gestione Layers
+                        </h4>
+                        <button 
+                          onClick={() => {
+                             const newId = `Layer ${layers.length}`;
+                             setLayers([...layers, { id: newId, name: newId, visible: true, frozen: false }]);
+                             setActiveLayerId(newId);
+                          }}
+                          className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-md transition-colors"
+                          title="Nuovo Layer"
+                        >
+                          <Plus size={14} />
+                        </button>
+                    </div>
+                    <div className="space-y-1.5 max-h-[500px] overflow-y-auto pr-1">
+                        {layers.map((l) => (
+                          <div
+                            key={l.id}
+                            className={`flex items-center gap-1 p-1.5 rounded-lg border transition-all ${activeLayerId === l.id ? "bg-white border-indigo-300 shadow-sm ring-1 ring-indigo-100" : "bg-neutral-50/50 border-neutral-200/60 hover:bg-white hover:border-neutral-300"}`}
+                          >
+                            <div className="flex-1 px-2 py-1 flex items-center min-w-0">
+                              {editingLayerId === l.id ? (
+                                <input
+                                  autoFocus
+                                  type="text"
+                                  className="w-full text-xs border border-indigo-300 rounded px-1 outline-none font-bold text-indigo-700"
+                                  value={l.name}
+                                  onChange={(e) => setLayers(layers.map((layer) => layer.id === l.id ? { ...layer, name: e.target.value } : layer))}
+                                  onBlur={() => setEditingLayerId(null)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') setEditingLayerId(null); }}
+                                  onClick={(e) => e.stopPropagation()}
+                                />
+                              ) : (
+                                <button 
+                                  onClick={() => setActiveLayerId(l.id)}
+                                  className={`flex-1 text-left truncate focus:outline-none flex flex-col items-start ${activeLayerId === l.id ? "text-indigo-700 font-bold" : "text-neutral-600 font-semibold"}`}
+                                  title="Imposta come corrente. Doppio click per rinominare."
+                                  onDoubleClick={() => setEditingLayerId(l.id)}
+                                >
+                                  <span className="truncate w-full">{l.name}</span>
+                                  {activeLayerId === l.id && <span className="block text-[8px] uppercase tracking-wider text-indigo-400 mt-0.5">Corrente</span>}
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-0.5 px-1">
+                                <button
+                                  onClick={() =>
+                                    setLayers(
+                                      layers.map((layer) =>
+                                        layer.id === l.id
+                                          ? { ...layer, visible: !layer.visible }
+                                          : layer,
+                                      ),
+                                    )
+                                  }
+                                  title={l.visible ? "Spegni (Nascondi)" : "Accendi (Mostra)"}
+                                  className={`p-1.5 rounded-md transition-colors ${l.visible ? "text-amber-500 hover:bg-amber-50" : "text-neutral-300 hover:bg-neutral-100"}`}
+                                >
+                                  {l.visible ? <Lightbulb size={14} /> : <LightbulbOff size={14} />}
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setLayers(
+                                      layers.map((layer) =>
+                                        layer.id === l.id
+                                          ? { ...layer, frozen: !layer.frozen }
+                                          : layer,
+                                      ),
+                                    )
+                                  }
+                                  title={l.frozen ? "Scongela (Sblocca)" : "Congela (Blocca)"}
+                                  className={`p-1.5 rounded-md transition-colors ${l.frozen ? "text-blue-500 bg-blue-50 hover:bg-blue-100 border border-blue-200" : "text-neutral-300 hover:bg-neutral-100 border border-transparent"}`}
+                                >
+                                  <Snowflake size={14} />
+                                </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                ) : activeSidebarTab === 'tavole' ? (
+                <>
+                  <p className="text-xs text-neutral-500 mb-4 font-normal leading-relaxed">
+                    Trascina i riquadri blu (tavola n. 1..5) sul foglio per selezionare l'area di stampa reale da esportare in PDF.
+                  </p>
+
+                  <div className="space-y-4">
+                    {tavole.map((tav) => (
+                      <div key={tav.id} className="border border-neutral-200 rounded-lg p-3 bg-neutral-50/50 hover:bg-neutral-50 transition-all shadow-xs">
+                        {/* Title and Visibility */}
+                        <div className="flex items-center justify-between mb-2 pb-1 border-b border-neutral-200/50">
+                          <span className="text-xs font-black text-neutral-800 font-mono tracking-tight">{tav.name}</span>
+                          <div className="flex gap-1 items-center">
+                            <button
+                              onClick={() => {
+                                setEditingCartiglioTavolaId(editingCartiglioTavolaId === tav.id ? null : tav.id);
+                              }}
+                              className={`p-1 rounded text-xs transition-all ${editingCartiglioTavolaId === tav.id ? "bg-indigo-100 text-indigo-700" : "text-neutral-500 hover:bg-neutral-200"}`}
+                              title="Modifica Cartiglio"
+                            >
+                              <Pen size={12} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setTavole(tavole.map(t => t.id === tav.id ? { ...t, visible: !t.visible } : t));
+                              }}
+                              className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${tav.visible ? "bg-indigo-600 text-white shadow-xs" : "bg-neutral-200 text-neutral-600"}`}
+                            >
+                              {tav.visible ? "Visibile" : "Nascosto"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {editingCartiglioTavolaId === tav.id && (
+                          <div className="mb-3 space-y-1.5 p-2 bg-white border border-neutral-200 rounded text-xs">
+                            <div className="flex flex-col gap-0.5">
+                              <label className="text-[8px] font-bold text-neutral-500 uppercase">Progetto</label>
+                              <input 
+                                type="text"
+                                className="border border-neutral-300 rounded px-1.5 py-0.5 w-full bg-neutral-50 focus:bg-white"
+                                value={tav.datiCartiglio.progetto}
+                                onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, datiCartiglio: {...t.datiCartiglio, progetto: e.target.value}} : t))}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              <label className="text-[8px] font-bold text-neutral-500 uppercase">Titolo</label>
+                              <input 
+                                type="text"
+                                className="border border-neutral-300 rounded px-1.5 py-0.5 w-full bg-neutral-50 focus:bg-white"
+                                value={tav.datiCartiglio.titolo}
+                                onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, datiCartiglio: {...t.datiCartiglio, titolo: e.target.value}} : t))}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              <label className="text-[8px] font-bold text-neutral-500 uppercase">Autore</label>
+                              <input 
+                                type="text"
+                                className="border border-neutral-300 rounded px-1.5 py-0.5 w-full bg-neutral-50 focus:bg-white"
+                                value={tav.datiCartiglio.autore}
+                                onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, datiCartiglio: {...t.datiCartiglio, autore: e.target.value}} : t))}
+                              />
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              <label className="text-[8px] font-bold text-neutral-500 uppercase">Data</label>
+                              <input 
+                                type="text"
+                                className="border border-neutral-300 rounded px-1.5 py-0.5 w-full bg-neutral-50 focus:bg-white"
+                                value={tav.datiCartiglio.data}
+                                onChange={(e) => setTavole(tavole.map(t => t.id === tav.id ? {...t, datiCartiglio: {...t.datiCartiglio, data: e.target.value}} : t))}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Controls (Format / Scale / Unit) Grid */}
+                        <div className="grid grid-cols-3 gap-1.5 mt-2">
+                          {/* Paper format selector */}
+                          <div>
+                            <label className="block text-[8px] text-neutral-500 font-bold uppercase tracking-wider mb-0.5">Foglio</label>
+                            <select
+                              value={tav.format}
+                              onChange={(e) => {
+                                setTavole(tavole.map(t => t.id === tav.id ? { ...t, format: e.target.value as any } : t));
+                              }}
+                              className="w-full bg-white border border-neutral-300 text-xs rounded p-1 font-semibold"
+                            >
+                              <option value="A4">A4</option>
+                              <option value="A3">A3</option>
+                              <option value="A2">A2</option>
+                              <option value="A1">A1</option>
+                              <option value="A0">A0</option>
+                            </select>
+                          </div>
+
+                          {/* Scale selector */}
+                          <div>
+                            <label className="block text-[8px] text-neutral-500 font-bold uppercase tracking-wider mb-0.5">Scala 1:</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={tav.scale}
+                              onChange={(e) => {
+                                const val = Math.max(1, Number(e.target.value));
+                                setTavole(tavole.map(t => t.id === tav.id ? { ...t, scale: val } : t));
+                              }}
+                              className="w-full bg-white border border-neutral-300 text-xs rounded p-1 text-center font-black"
+                            />
+                          </div>
+
+                          {/* Unit selector */}
+                          <div>
+                            <label className="block text-[8px] text-neutral-500 font-bold uppercase tracking-wider mb-0.5">Unità</label>
+                            <select
+                              value={tav.unit}
+                              onChange={(e) => {
+                                setTavole(tavole.map(t => t.id === tav.id ? { ...t, unit: e.target.value as any } : t));
+                              }}
+                              className="w-full bg-white border border-neutral-300 text-xs rounded p-1 font-semibold"
+                            >
+                              <option value="m">Metri (m)</option>
+                              <option value="cm">Cm (cm)</option>
+                              <option value="mm">Mm (mm)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Action buttons (printable preview) */}
+                        <div className="flex gap-2 mt-3 pt-2">
+                          <button
+                            onClick={async () => {
+                            const { exportNativePDF } = await import("./utils/pdfExport");
+                            const url = exportNativePDF(entities, tav.format, tav.scale, tav.unit, tav, 'bloburl');
+                            if (url) {
+                              setPdfPreviewUrl(url);
+                              setActivePreviewTavolaId(tav.id);
+                            }
+                            }}
+                            className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 font-bold py-1.5 px-2 rounded-md text-[10px] transition-colors flex items-center justify-center gap-1 shadow-sm uppercase tracking-wider"
+                          >
+                            Anteprima
+                          </button>
+                          <button
+                            onClick={async () => {
+                              const { exportNativePDF } = await import("./utils/pdfExport");
+                              exportNativePDF(entities, tav.format, tav.scale, tav.unit, tav);
+                            }}
+                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold py-1.5 px-2 rounded-md text-[10px] transition-colors flex items-center justify-center gap-1 shadow-sm uppercase tracking-wider"
+                          >
+                            <Printer size={10} className="stroke-white" />
+                            <span>Salva PDF</span>
+                          </button>
+                        </div>
+                        <div className="mt-2 text-[9px] text-amber-700 bg-amber-50 p-1.5 rounded border border-amber-200">
+                           <span className="font-bold">⚠️ SCALA DI STAMPA:</span><br/>
+                           Per mantenere la scala reale (es. 400cm = 4cm su carta), imposta <span className="font-bold underline italic">"Scala: 100%"</span> o <span className="font-bold underline italic">"Dimensioni Effettive"</span> nel pannello di stampa. Evita "Adatta alla pagina".
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : activeSidebarTab === 'manuale' ? (
+                <div className="space-y-4 font-sans text-neutral-700">
+                  <div className="border-b border-neutral-200 pb-2">
+                    <h4 className="text-xs font-black text-neutral-800 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                      <BookOpen size={13} className="text-emerald-600" />
+                      🇮🇹 MANUALE IN LINEA GECOLA
+                    </h4>
+                    <p className="text-[10px] text-neutral-400 mt-1">
+                      Fai clic su qualsiasi elemento o passa il mouse sopra un pulsante per aprirne la spiegazione.
+                    </p>
+                  </div>
+
+                  {/* Active Selected/Hovered Tool Detail */}
+                  <div className="bg-emerald-50/50 border border-emerald-200 rounded-lg p-3.5 space-y-2">
+                    <span className="text-[9px] font-black tracking-widest text-emerald-700 font-mono block uppercase">
+                      Pannello Dettaglio Attivo:
+                    </span>
+                    {hoveredGuide ? (
+                      <div>
+                        <div className="flex items-center gap-1.5 justify-between">
+                          <h5 className="text-xs font-black text-emerald-950 font-sans">{hoveredGuide.title}</h5>
+                          {hoveredGuide.hotkey && (
+                            <span className="text-[8px] bg-emerald-200 text-emerald-950 px-1 font-mono rounded">
+                              {hoveredGuide.hotkey}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-neutral-600 mt-1 leading-relaxed">
+                          {hoveredGuide.description}
+                        </p>
+                        {hoveredGuide.tip && (
+                          <div className="mt-2 text-[10px] leading-relaxed text-indigo-700 bg-white border border-indigo-100 p-2 rounded">
+                            <span className="font-extrabold text-amber-500">💡 Suggerimento:</span> {hoveredGuide.tip}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="py-2 text-center text-[11px] text-neutral-400 italic">
+                        Passa il puntatore del mouse sopra un pulsante qualsiasi della barra superiore o seleziona un comando dall'indice per visualizzarne la scheda tecnica qui in tempo reale.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* General Index Section */}
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-black tracking-widest text-neutral-400 font-mono block uppercase">
+                      Indice dei comandi disponibili:
+                    </span>
+                    <div className="space-y-1 max-h-[380px] overflow-y-auto pr-1">
+                      {Object.entries(GUIDE_DATABASE).map(([key, guide]) => (
+                        <button
+                          key={key}
+                          onClick={() => {
+                            setHoveredGuide(guide);
+                            setGuideLockedBy(key);
+                          }}
+                          className={`w-full text-left p-2 rounded-lg border text-xs transition-all flex flex-col gap-0.5 ${guideLockedBy === key ? "bg-white border-emerald-500 ring-2 ring-emerald-100 shadow-xs" : "bg-neutral-50 border-neutral-100 hover:bg-white hover:border-neutral-200"}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-neutral-800">{key}</span>
+                            <span className="text-[9px] text-neutral-400 font-mono">{guide.hotkey}</span>
+                          </div>
+                          <span className="text-[10px] text-neutral-500 line-clamp-1">{guide.title}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Command Bar */}
+      <footer className="h-8 border-t border-slate-800 bg-slate-900 px-4 flex items-center text-sm">
+        <span className="text-slate-500 mr-2 uppercase tracking-wide font-mono text-xs">
+          Command:
+        </span>
+        <input
+          type="text"
+          className="bg-transparent flex-1 outline-none font-mono text-xs text-white"
+          placeholder="Type a command (f.ex. L, C, R)..."
+        />
+      </footer>
+
+      {/* Hidden file input for DXF/DWG/Images/Video/Audio/PDF uploader */}
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".dxf,.dwg,image/*,video/*,audio/*,.pdf"
+        onChange={handleImportFile}
+        className="hidden"
+        style={{ display: 'none' }}
+      />
+
+      {/* DWG Proprietary File Instructions Modal */}
+      {showDwgModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 select-none animate-fade-in" onClick={() => setShowDwgModal(false)}>
+          <div className="bg-slate-950 border border-slate-800 p-6 rounded-xl shadow-2xl max-w-sm w-full relative" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3 mb-4">
+              <h3 className="text-xs font-black uppercase text-red-400 tracking-wider font-mono flex items-center gap-2">
+                <span className="px-1.5 py-0.5 bg-red-900/55 border border-red-700 rounded text-[9px] text-red-300">Formato DWG</span>
+                Notifica Informativa
+              </h3>
+              <button onClick={() => setShowDwgModal(false)} className="text-slate-500 hover:text-white font-mono text-xs font-bold leading-none">
+                ✕
+              </button>
+            </div>
+            
+            <p className="text-xs text-slate-300 leading-relaxed mb-4">
+              Hai caricato il file <span className="font-semibold text-yellow-400 font-mono">"{dwgFileName}"</span>.
+              <br/><br/>
+              Il formato <span className="font-bold text-white">DWG</span> di AutoCAD è un formato file binario compresso e con copyright proprietario non leggibile nativamente dai moderni browser web.
+            </p>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-lg p-3.5 mb-4">
+              <span className="text-[10px] font-black text-indigo-400 font-mono block uppercase mb-1.5">Come procedere per il disegno:</span>
+              <ul className="text-[10.5px] text-slate-400 list-decimal pl-4 space-y-2 leading-relaxed">
+                <li>
+                  Converti il file DWG in formato <span className="text-indigo-300 font-semibold font-mono">DXF Vettoriale</span> (es. R12 o AutoCAD 2000 per compatibilità ottimale).
+                </li>
+                <li>
+                  Puoi usare convertitori gratuiti come <span className="text-indigo-300 underline font-semibold">ODA File Converter</span>, convertitori online o esportarlo direttamente da AutoCAD.
+                </li>
+                <li>
+                  Importa il file convertito <span className="text-emerald-400 font-bold font-mono">.dxf</span> qui per rigenerare all'istante l'intero disegno vettoriale sul foglio!
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex justify-end gap-2.5">
+              <button
+                type="button"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold tracking-wide font-sans transition-colors shadow-md"
+                onClick={() => setShowDwgModal(false)}
+              >
+                Ho capito, Chiudi
+              </button>
+            </div>
+          </div>
+        </div>
       )}
+
+      {/* Raccordo configuration dialog */}
+      <RaccordoDialog
+        key={editingRaccordo ? `edit-${editingRaccordo.id}` : 'new-raccordo'}
+        isOpen={isRaccordoDialogOpen}
+        onClose={() => {
+          if (editingRaccordo?.raccordoMetadata) {
+            // Restore to the original config saved in metadata
+            const meta = editingRaccordo.raccordoMetadata;
+            cadCanvasRef.current?.editRaccordo(
+              meta.id1,
+              meta.id2,
+              meta.clickPt1,
+              meta.clickPt2,
+              editingRaccordo.id,
+              meta.config,
+              meta.originalLine1,
+              meta.originalLine2
+            );
+          }
+          setIsRaccordoDialogOpen(false);
+          setEditingRaccordo(null);
+        }}
+        initialConfig={editingRaccordo?.raccordoMetadata ? editingRaccordo.raccordoMetadata.config : raccordoConfig}
+        onChange={(config) => {
+          if (editingRaccordo?.raccordoMetadata) {
+            const meta = editingRaccordo.raccordoMetadata;
+            cadCanvasRef.current?.editRaccordo(
+              meta.id1,
+              meta.id2,
+              meta.clickPt1,
+              meta.clickPt2,
+              editingRaccordo.id,
+              config,
+              meta.originalLine1,
+              meta.originalLine2
+            );
+          } else {
+            setRaccordoConfig(config);
+          }
+        }}
+        onSave={(config) => {
+          if (editingRaccordo?.raccordoMetadata) {
+            const meta = editingRaccordo.raccordoMetadata;
+            const rId = editingRaccordo.id;
+            
+            // Clear editingRaccordo so onClose does not trigger restoration revert
+            setEditingRaccordo(null);
+            setIsRaccordoDialogOpen(false);
+
+            // Apply final configuration and commit to history
+            cadCanvasRef.current?.editRaccordo(
+              meta.id1,
+              meta.id2,
+              meta.clickPt1,
+              meta.clickPt2,
+              rId,
+              config,
+              meta.originalLine1,
+              meta.originalLine2
+            );
+            
+            setShortcutToast(`Raccordo modificato: ${config.type === 'curvo' ? 'Curvo r=' : 'Rettilineo d='}${config.value} cm`);
+            setTimeout(() => setShortcutToast(null), 4000);
+          } else {
+            setRaccordoConfig(config);
+            setSelectedTool("Raccordo");
+            setIsRaccordoDialogOpen(false);
+            setShortcutToast(`Raccordo pronto: ${config.type === 'curvo' ? 'Curvo r=' : 'Rettilineo d='}${config.value} cm`);
+            setTimeout(() => setShortcutToast(null), 4000);
+          }
+        }}
+      />
+
+      {/* DXF text reader dialog */}
+      <DXFTextReaderDialog
+        isOpen={isDXFTextReaderOpen}
+        onClose={() => setIsDXFTextReaderOpen(false)}
+        activeLayerId={activeLayerId}
+        layers={layers}
+        onImport={(importedEntities, newLayers, mergeMode) => {
+          if (newLayers.length > 0) {
+            setLayers(prev => [...prev, ...newLayers]);
+          }
+
+          if (mergeMode === 'replace') {
+            updateEntitiesWithHistory(importedEntities);
+          } else {
+            updateEntitiesWithHistory(prev => [...prev, ...importedEntities]);
+          }
+
+          setShortcutToast(`Generati con successo ${importedEntities.length} elementi vettoriali DXF!`);
+          setTimeout(() => setShortcutToast(null), 4000);
+        }}
+      />
+
+      {/* Floating Interactive Manual Companion */}
+      {showFloatingManual && hoveredGuide && (
+        <div className="fixed bottom-6 left-6 z-50 w-80 bg-neutral-900/40 backdrop-blur-lg text-neutral-100 rounded-lg shadow-xl border border-neutral-700/30 p-4 transition-all duration-300 transform scale-100 ease-out flex flex-col gap-2">
+          <div className="flex items-center justify-between border-b border-neutral-800 pb-1.5 flex-nowrap">
+            <div className="flex items-center gap-1.5 text-emerald-400 font-sans font-bold text-xs uppercase tracking-wider">
+              <BookOpen size={14} className="animate-pulse" />
+              <span>Manuale Interattivo</span>
+            </div>
+            <button 
+              onClick={() => {
+                setHoveredGuide(null);
+                setGuideLockedBy(null);
+                setShowFloatingManual(false);
+              }}
+              className="text-neutral-400 hover:text-white hover:bg-neutral-800 rounded p-1 transition-colors"
+              title="Chiudi Manuale"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div>
+            <h4 className="text-sm font-semibold text-neutral-100 flex items-center justify-between gap-1">
+              <span className="truncate">{hoveredGuide.title}</span>
+              {hoveredGuide.hotkey && (
+                <span className="text-[9px] bg-neutral-800 text-neutral-300 px-1.5 py-0.5 rounded font-mono shrink-0">
+                  {hoveredGuide.hotkey}
+                </span>
+              )}
+            </h4>
+            <p className="text-xs text-neutral-300 mt-1.5 leading-relaxed">
+              {hoveredGuide.description}
+            </p>
+            {hoveredGuide.tip && (
+              <div className="mt-2.5 p-2 bg-indigo-950/40 border border-indigo-900/40 rounded text-[11px] text-indigo-300 flex items-start gap-1">
+                <span className="text-amber-400 font-bold shrink-0">💡</span>
+                <span>{hoveredGuide.tip}</span>
+              </div>
+            )}
+          </div>
+          <div className="text-[9px] text-neutral-400 pt-1 text-right italic font-medium">
+            Scompare automaticamente quando premi il pulsante o lo strumento!
+          </div>
+        </div>
+      )}
+
+      {/* BIM Dialog Submenus were removed and redesigned in the inline top bars for higher efficiency */}
     </div>
   );
-};
-
-export default App;
+}
