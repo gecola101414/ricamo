@@ -1,10 +1,6 @@
 {
-  "name": "Remix:  Gecolacad 10_  BIM azzerato",
-  "description": "parallele funzionano perfettamnete e con il tasto shfr    diventano multiple....adesso proviamo a perfezionare automatismo de i tagli degli spigoli o allumanti",
-  "requestFramePermissions": [
-    "microphone"
-  ],
-  "majorCapabilities": [
-    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
-  ]
+  "name": "Gecola Struktura",
+  "description": "Piattaforma cloud nativa per la modellazione 3D in cemento armato, calcolo agli elementi finiti (FEM), generazione automatica dello schema dei ferri 3D secondo NTC 2018 / Eurocodice 2 e ottimizzazione strutturale assistita da IA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
