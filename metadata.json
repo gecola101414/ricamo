@@ -1,6 +1,6 @@
 {
-  "name": "Gecola Struktura",
-  "description": "Piattaforma cloud nativa per la modellazione 3D in cemento armato, calcolo agli elementi finiti (FEM), generazione automatica dello schema dei ferri 3D secondo NTC 2018 / Eurocodice 2 e ottimizzazione strutturale assistita da IA.",
+  "name": "Il Massimo della Terra",
+  "description": "Agricoltura urbana circolare, cassette antispreco da 5 euro, orti solidali accessibili e laboratori educativi ideati da Massimo.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
